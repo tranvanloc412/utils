@@ -8,7 +8,7 @@ import argparse
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from utils.logger import setup_logger
-from utils.config import get_aws_region, get_provision_role, get_zones_url
+from utils.config import get_aws_region, get_viewer_role, get_zones_url
 from utils.lz import fetch_zones_from_url, filter_zones, get_account_id
 from utils.session import SessionManager
 
@@ -31,12 +31,14 @@ def main():
     )
     parser.add_argument(
         "--landing-zones",
+        "-l",
         nargs="*",
         default=[],
         help="Landing zone names (e.g., cmsnonprod appnonprod). Leave blank for all zones in the environment.",
     )
     parser.add_argument(
         "--environment",
+        "-e",
         default="nonprod",
         choices=["prod", "nonprod"],
         help="Environment suffix to filter zones if landing-zones not specified.",
@@ -48,7 +50,7 @@ def main():
 
     zones_url = get_zones_url()
     region = get_aws_region()
-    role = get_provision_role()
+    role = get_viewer_role()
     sm = SessionManager()
 
     try:
