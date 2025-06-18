@@ -53,7 +53,7 @@ logs/
 # AWS
 .aws/
 credentials
-config
+configs
 
 # Temporary files
 *.tmp
