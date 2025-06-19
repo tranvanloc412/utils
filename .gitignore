@@ -60,3 +60,6 @@ configs
 *.temp
 *.bak
 *.backup
+
+# Results
+results/

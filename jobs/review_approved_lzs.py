@@ -5,41 +5,33 @@ review_approved_lzs.py
 Given two CSV files
   1. approved_lzs.csv   - a list of Landing Zones that have been cleared for
                           snapshot deletion (first column only)
-  2. snapshot_report_*.csv - daily scan showing how many snapshots >30 days
+  2. snapshot_report_*.csv - daily scan showing how many snapshots > 30 days
                              each Landing Zone still owns.
 
 The script prints:
-  • which *approved* LZs still own ≥1 snapshot older than 30 days
+  • which *approved* LZs still own ≥ 1 snapshot older than 30 days
   • which approved LZs are *missing* from the report (optional sanity-check)
-
-Both CSVs may contain:
-  - a header line
-  - trailing empty columns (",,")
-  - blank lines
-  - any capitalisation of Landing-Zone names (we compare lower-case)
 
 Usage
 -----
 $ python review_approved_lzs.py \
-        --approved approved_lzs.csv \
-        --report   snapshot_report_prod_20250610_0935.csv
-
-Dependencies: only the Python 3 standard library.
+        --approved results/approved_lzs.csv \
+        --report   results/snapshot_report_prod_20250610_0935.csv
 """
 
 import csv
+import sys
 import argparse
 import logging
 from pathlib import Path
 from typing import Dict, Set
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
-log = logging.getLogger(__name__)
+# Add project root to sys.path
+sys.path.append(str(Path(__file__).resolve().parent.parent))
 
+from utils.logger import setup_logger
 
-# ---------------------------------------------------------------------------
-# 1. LOAD THE APPROVED LIST  (approved_lzs.csv)
-# ---------------------------------------------------------------------------
+logger = setup_logger(__name__, log_file="review_approved_lzs.log")
 
 
 def load_approved_lzs(path: Path) -> Set[str]:
@@ -60,11 +52,6 @@ def load_approved_lzs(path: Path) -> Set[str]:
 
     log.info("Loaded %d approved landing zones", len(lzs))
     return lzs
-
-
-# ---------------------------------------------------------------------------
-# 2. PARSE THE SNAPSHOT REPORT  (snapshot_report_*.csv)
-# ---------------------------------------------------------------------------
 
 
 def parse_snapshot_report(path: Path) -> Dict[str, int]:
@@ -94,11 +81,6 @@ def parse_snapshot_report(path: Path) -> Dict[str, int]:
     return results
 
 
-# ---------------------------------------------------------------------------
-# 3. MAIN ROUTINE
-# ---------------------------------------------------------------------------
-
-
 def main(approved_file: Path, report_file: Path) -> None:
     approved = load_approved_lzs(approved_file)
     snapshot_counts = parse_snapshot_report(report_file)
@@ -108,8 +90,7 @@ def main(approved_file: Path, report_file: Path) -> None:
     }
 
     not_approved_offenders = {
-        lz: cnt for lz, cnt in snapshot_counts.items() 
-        if lz not in approved and cnt > 0
+        lz: cnt for lz, cnt in snapshot_counts.items() if lz not in approved and cnt > 0
     }
 
     missing = approved - snapshot_counts.keys()
@@ -123,7 +104,9 @@ def main(approved_file: Path, report_file: Path) -> None:
 
     if not_approved_offenders:
         print("\n🚨  NOT approved LZs that have snapshots > 30 days old:")
-        for lz, cnt in sorted(not_approved_offenders.items(), key=lambda x: (-x[1], x[0])):
+        for lz, cnt in sorted(
+            not_approved_offenders.items(), key=lambda x: (-x[1], x[0])
+        ):
             print(f"  • {lz:10}  {cnt:,} snapshots")
 
     if missing:
@@ -131,10 +114,6 @@ def main(approved_file: Path, report_file: Path) -> None:
         for lz in sorted(missing):
             print(f"  • {lz}")
 
-
-# ---------------------------------------------------------------------------
-# 4. CLI ENTRY-POINT
-# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(

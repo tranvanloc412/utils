@@ -1,13 +1,15 @@
 # AWS Operations Utility Suite
 
-A comprehensive Python project for managing AWS operations through various utility scripts. This project provides a unified command-line interface to run different AWS-related jobs including landing zone management, snapshot analysis, and approval workflows.
+A Python toolkit for managing AWS operations including snapshot cleanup, landing zone management, and approval workflows.
 
-## Quick Start
+## Requirements
 
-### 1. Setup
+- AWS credentials configured (Jump Viewer or Provision role)
+
+## Setup
 
 ```bash
-# Create a virtual environment
+# Create virtual environment
 python3 -m venv venv
 source venv/bin/activate
 
@@ -15,30 +17,43 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### Usage
+## Available Tools
 
-#### List Old Snapshots
+### delete_old_backups.py
 
-Run the script to list EC2 snapshots older than 30 days:
-
-```bash
-python3 jobs/list_old_snapshots.py --landing-zones cmsnonprod appnonprod
-```
-
-Or list all nonprod landing zones:
+Delete old AMIs and snapshots across landing zones.
 
 ```bash
-python3 jobs/list_old_snapshots.py --environment nonprod
+python jobs/delete_old_backups.py --days 31 --dry-run
+python jobs/delete_old_backups.py --environment prod --days 45
 ```
 
-#### Delete Old AMIs and Snapshots
+### list_old_snapshots.py
 
-Run the script to delete EC2 AMIs and snapshots older than 30 days:
+Generate reports of old snapshots.
 
 ```bash
-python3 jobs/delete_old_backups.py --landing-zones cmsnonprod appnonprod
+python jobs/list_old_snapshots.py --days 30
+python jobs/list_old_snapshots.py --environment prod --days 45
 ```
 
+### review_approved_lzs.py
+
+Review approved landing zones against snapshot reports.
+
 ```bash
-python3 jobs/delete_old_backups.py --environment nonprod
+python jobs/review_approved_lzs.py --approved approved_lzs.csv --report snapshot_report.csv
+python jobs/review_approved_lzs.py --approved approved_lzs.csv --report snapshot_report.csv --days 45 --csv
 ```
+
+## Output
+
+- Console output with progress and summary
+- CSV reports saved to `results/` directory
+- Detailed logging for audit trails
+
+## Safety Features
+
+- Dry-run mode available for testing
+- Comprehensive logging
+- Input validation and error handling

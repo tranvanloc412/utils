@@ -80,3 +80,15 @@ def get_zones_url() -> str:
     """Get the zones URL."""
     settings = load_settings()
     return settings.get("zones_url", "")
+
+
+def get_test_account_id() -> str:
+    """Get test account ID"""
+    aws_config = get_aws_config()
+    return aws_config.get("test_account", {}).get("id", "")
+
+
+def get_test_account_name() -> str:
+    """Get test account name"""
+    aws_config = get_aws_config()
+    return aws_config.get("test_account", {}).get("name", "")
