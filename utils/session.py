@@ -8,6 +8,7 @@ Provides functions and classes to handle AWS session creation and role assumptio
 """
 
 import boto3
+import os
 from typing import Dict, Optional
 
 
@@ -65,4 +66,40 @@ class SessionManager:
                 account_id, account_name, role, region, role_session_name
             )
 
+        return cls._sessions[session_key]
+
+    @classmethod
+    def get_session_from_env(
+        cls,
+        region: str = "ap-southeast-2",
+        session_name: str = "pipeline"
+    ) -> boto3.Session:
+        """Create a boto3 Session from environment variables for pipeline usage.
+        
+        Expected environment variables:
+        - AWS_ACCESS_KEY_ID or AWS_ACCESS_KEY
+        - AWS_SECRET_ACCESS_KEY or AWS_SECRET_KEY  
+        - AWS_SESSION_TOKEN (optional)
+        """
+        session_key = f"env:{region}:{session_name}"
+        
+        if session_key not in cls._sessions:
+            # Check for AWS credentials in environment variables
+            access_key = os.getenv('AWS_ACCESS_KEY_ID') or os.getenv('AWS_ACCESS_KEY')
+            secret_key = os.getenv('AWS_SECRET_ACCESS_KEY') or os.getenv('AWS_SECRET_KEY')
+            session_token = os.getenv('AWS_SESSION_TOKEN')
+            
+            if not access_key or not secret_key:
+                raise ValueError(
+                    "Missing required environment variables. "
+                    "Please set AWS_ACCESS_KEY_ID/AWS_ACCESS_KEY and AWS_SECRET_ACCESS_KEY/AWS_SECRET_KEY"
+                )
+            
+            cls._sessions[session_key] = boto3.Session(
+                aws_access_key_id=access_key,
+                aws_secret_access_key=secret_key,
+                aws_session_token=session_token,
+                region_name=region
+            )
+            
         return cls._sessions[session_key]

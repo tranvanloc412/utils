@@ -11,6 +11,8 @@ import csv
 import logging
 import sys
 from dataclasses import dataclass, field
+
+
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
@@ -447,6 +449,12 @@ def main():
         action="store_true",
         help="Add 'nis_managed=true' tag to matched resources",
     )
+    parser.add_argument(
+        "--pipeline",
+        "-p",
+        action="store_true",
+        help="Pipeline mode: use AWS credentials from environment variables",
+    )
 
     args = parser.parse_args()
 
@@ -459,10 +467,35 @@ def main():
     # Initialize session manager
     sm = SessionManager()
     region = get_aws_region()
-    role = get_provision_role()
-
-    if args.test:
+    
+    if args.pipeline:
+        # Pipeline mode: use environment variables
+        logger.info("🔧 Pipeline mode: using AWS credentials from environment variables")
+        try:
+            session = sm.get_session_from_env(region, "pipeline")
+            scanner = ResourceScanner(session)
+            matched = scanner.scan_all_resources()
+            
+            if matched:
+                logger.info(f"📊 Found {len(matched)} resources matching criteria")
+                write_results_to_csv(matched, "pipeline")
+                
+                if args.tag_nis_managed:
+                    tagger = ResourceTagger(session)
+                    tagger.tag_resources(matched)
+            else:
+                logger.info("ℹ️ No resources found matching criteria")
+                
+        except ValueError as e:
+            logger.error(f"❌ Pipeline mode error: {e}")
+            return
+        except Exception as e:
+            logger.error(f"❌ Error in pipeline mode: {e}")
+            return
+            
+    elif args.test:
         # Test mode
+        role = get_provision_role()
         account_id = get_test_account_id()
         zone_name = get_test_account_name()
 
@@ -492,6 +525,7 @@ def main():
 
     else:
         # Production mode
+        role = get_provision_role()
         try:
             zones_url = get_zones_url()
             zones = fetch_zones_from_url(zones_url)
