@@ -44,7 +44,11 @@ SERVICES = {
     "s3": "s3",
     "sns": "sns",
     "sqs": "sqs",
-    "lambda": "lambda:function",
+    "dynamodb": "dynamodb:table",
+    "cloudwatch": "cloudwatch:alarm",
+    "events": "events:rule",
+    "iam": "iam:role",
+    "route53": "route53:hostedzone",
     "lb": "elasticloadbalancing:loadbalancer",
     "tg": "elasticloadbalancing:targetgroup",
     "efs": "elasticfilesystem:file-system",
@@ -53,6 +57,9 @@ SERVICES = {
     "kms": "kms:key",
     "rds": "rds:db",
 }
+
+# Services that require direct API calls (not supported by Resource Groups Tagging API)
+DIRECT_API_SERVICES = ["iam", "route53"]
 
 TAG_PRESETS = {
     "asg": [{"Key": "aws:autoscaling:groupName"}],
@@ -64,33 +71,42 @@ TAG_PRESETS = {
 }
 
 
+# Standard exclude rule for all services
+STANDARD_EXCLUDE = TAG_PRESETS["nef2"] + TAG_PRESETS["nabserv"] + TAG_PRESETS["cps"] + TAG_PRESETS["wiz"]
+
 SERVICE_TAG_RULES = {
     "ec2": {
         "include": TAG_PRESETS["managed_by_cms"],
-        "exclude": TAG_PRESETS["asg"],
+        "exclude": STANDARD_EXCLUDE,
     },
     "ebs": {
-        "exclude": TAG_PRESETS["asg"] + TAG_PRESETS["nabserv"],
+        "exclude": STANDARD_EXCLUDE,
     },
-    "asg": {"exclude": TAG_PRESETS["nabserv"]},
-    "s3": {"exclude": TAG_PRESETS["nabserv"]},
-    "lb": {"exclude": TAG_PRESETS["nef2"]},
-    "tg": {"exclude": TAG_PRESETS["nef2"]},
-    "efs": {"exclude": TAG_PRESETS["nef2"]},
-    "fsx": {},
+    "asg": {"exclude": STANDARD_EXCLUDE},
+    "s3": {"exclude": STANDARD_EXCLUDE},
+    "lb": {"exclude": STANDARD_EXCLUDE},
+    "tg": {"exclude": STANDARD_EXCLUDE},
+    "efs": {"exclude": STANDARD_EXCLUDE},
+    "fsx": {"exclude": STANDARD_EXCLUDE},
     "sg": {
-        "exclude": TAG_PRESETS["nef2"] + TAG_PRESETS["cps"] + TAG_PRESETS["nabserv"]
+        "exclude": STANDARD_EXCLUDE,
     },
     "kms": {
-        "exclude": TAG_PRESETS["nef2"] + TAG_PRESETS["wiz"] + TAG_PRESETS["nabserv"]
+        "exclude": STANDARD_EXCLUDE,
     },
-    "rds": {},
-    "sns": {"exclude": TAG_PRESETS["nef2"] + TAG_PRESETS["cps"]},
-    "sqs": {"exclude": TAG_PRESETS["nef2"] + TAG_PRESETS["cps"]},
-    "lambda": {"exclude": TAG_PRESETS["nef2"] + TAG_PRESETS["cps"]},
+    "rds": {"exclude": STANDARD_EXCLUDE},
+    "sns": {"exclude": STANDARD_EXCLUDE},
+    "sqs": {"exclude": STANDARD_EXCLUDE},
+    "dynamodb": {"exclude": STANDARD_EXCLUDE},
+    "cloudwatch": {"exclude": STANDARD_EXCLUDE},
+    "events": {"exclude": STANDARD_EXCLUDE},
+    "iam": {"exclude": STANDARD_EXCLUDE},
+    "route53": {"exclude": STANDARD_EXCLUDE},
+    "lambda": {"exclude": STANDARD_EXCLUDE},
 }
 
-RESOURCE_TYPES = list(SERVICES.values())
+# Filter out services that require direct API calls
+RESOURCE_TYPES = [v for k, v in SERVICES.items() if k not in DIRECT_API_SERVICES]
 
 
 def matches_includes(tags, include_rules):
@@ -121,10 +137,8 @@ def matches_excludes(tags, exclude_rules):
         val = tag_map.get(key)
         if val:
             if "Values" in cond:
-                match_type = cond.get(
-                    "MatchType", "contains"
-                ).lower()  # Default to contains for excludes
-
+                match_type = cond.get("MatchType", "contains").lower()  # Default to contains for excludes
+                
                 if match_type == "exact":
                     # Exact matching for excludes
                     if val in [v.lower() for v in cond["Values"]]:
@@ -139,14 +153,130 @@ def matches_excludes(tags, exclude_rules):
     return False
 
 
+def scan_iam_roles(session) -> List[Tuple[str, Dict[str, str]]]:
+    """Scan IAM roles using direct IAM API calls"""
+    client = session.client("iam")
+    paginator = client.get_paginator("list_roles")
+    matched = []
+    
+    logger.debug("🔍 Scanning IAM roles...")
+    
+    for page in paginator.paginate():
+        for role in page.get("Roles", []):
+            role_name = role["RoleName"]
+            arn = role["Arn"]
+            
+            try:
+                # Get role tags
+                response = client.list_role_tags(RoleName=role_name)
+                tags = response.get("Tags", [])
+                
+                # Convert to standard tag format
+                formatted_tags = [{"Key": tag["Key"], "Value": tag["Value"]} for tag in tags]
+                
+                logger.debug(f"🔍 Processing IAM role: {arn}, tags: {len(formatted_tags)}")
+                
+                # Apply filtering rules
+                rules = SERVICE_TAG_RULES.get("iam", {})
+                include_rules = rules.get("include", [])
+                exclude_rules = rules.get("exclude", [])
+                
+                if matches_excludes(formatted_tags, exclude_rules):
+                    logger.debug(f"⏭️ Excluded by tag rule: {arn}")
+                    continue
+                if include_rules and not matches_includes(formatted_tags, include_rules):
+                    logger.debug(f"⏭️ Not included by tag rule: {arn}")
+                    continue
+                
+                matched.append((arn, {"tags": formatted_tags, "service": "iam"}))
+                logger.debug(f"✅ Matched IAM role: {arn}")
+                
+            except Exception as e:
+                logger.debug(f"⚠️ Error processing IAM role {role_name}: {e}")
+                continue
+    
+    logger.debug(f"📊 IAM roles scan complete: {len(matched)} matched")
+    return matched
+
+
+def scan_route53_zones(session) -> List[Tuple[str, Dict[str, str]]]:
+    """Scan Route53 hosted zones using direct Route53 API calls"""
+    client = session.client("route53")
+    paginator = client.get_paginator("list_hosted_zones")
+    matched = []
+    
+    logger.debug("🔍 Scanning Route53 hosted zones...")
+    
+    for page in paginator.paginate():
+        for zone in page.get("HostedZones", []):
+            zone_id = zone["Id"].replace("/hostedzone/", "")
+            zone_name = zone["Name"]
+            arn = f"arn:aws:route53:::hostedzone/{zone_id}"
+            
+            try:
+                # Get zone tags
+                response = client.list_tags_for_resource(
+                    ResourceType="hostedzone",
+                    ResourceId=zone_id
+                )
+                tags = response.get("ResourceTagSet", {}).get("Tags", [])
+                
+                # Convert to standard tag format
+                formatted_tags = [{"Key": tag["Key"], "Value": tag["Value"]} for tag in tags]
+                
+                logger.debug(f"🔍 Processing Route53 zone: {arn} ({zone_name}), tags: {len(formatted_tags)}")
+                
+                # Apply filtering rules
+                rules = SERVICE_TAG_RULES.get("route53", {})
+                include_rules = rules.get("include", [])
+                exclude_rules = rules.get("exclude", [])
+                
+                if matches_excludes(formatted_tags, exclude_rules):
+                    logger.debug(f"⏭️ Excluded by tag rule: {arn}")
+                    continue
+                if include_rules and not matches_includes(formatted_tags, include_rules):
+                    logger.debug(f"⏭️ Not included by tag rule: {arn}")
+                    continue
+                
+                matched.append((arn, {"tags": formatted_tags, "service": "route53", "name": zone_name}))
+                logger.debug(f"✅ Matched Route53 zone: {arn}")
+                
+            except Exception as e:
+                logger.debug(f"⚠️ Error processing Route53 zone {zone_id}: {e}")
+                continue
+    
+    logger.debug(f"📊 Route53 zones scan complete: {len(matched)} matched")
+    return matched
+
+
 def scan_resources(session) -> List[Tuple[str, Dict[str, str]]]:
+    matched = []
+    
+    # Scan services supported by Resource Groups Tagging API
+    if RESOURCE_TYPES:
+        logger.info(f"🔍 Starting Resource Groups Tagging API scan with resource types: {RESOURCE_TYPES}")
+        matched.extend(scan_resources_with_tagging_api(session))
+    
+    # Scan services requiring direct API calls
+    for service in DIRECT_API_SERVICES:
+        if service == "iam":
+            logger.info("🔍 Starting IAM roles scan...")
+            matched.extend(scan_iam_roles(session))
+        elif service == "route53":
+            logger.info("🔍 Starting Route53 hosted zones scan...")
+            matched.extend(scan_route53_zones(session))
+    
+    logger.info(f"📊 Total scan complete: {len(matched)} resources matched across all services")
+    return matched
+
+
+def scan_resources_with_tagging_api(session) -> List[Tuple[str, Dict[str, str]]]:
+    """Scan resources using the Resource Groups Tagging API"""
     client = session.client("resourcegroupstaggingapi")
     paginator = client.get_paginator("get_resources")
     matched = []
     total_resources = 0
     processed_resources = 0
-
-    logger.info(f"🔍 Starting scan with resource types: {RESOURCE_TYPES}")
 
     for page in paginator.paginate(ResourceTypeFilters=RESOURCE_TYPES):
         resources_in_page = page.get("ResourceTagMappingList", [])
@@ -167,7 +297,7 @@ def scan_resources(session) -> List[Tuple[str, Dict[str, str]]]:
 
                     # Handle different ARN formats
                     if service in ["s3", "sns", "sqs"]:
-                        # Services with simplified ARN formats (no region/account)
+                        # Services with simplified ARN formats
                         # S3: arn:aws:s3:::bucket-name
                         # SNS: arn:aws:sns:region:account:topic-name
                         # SQS: arn:aws:sqs:region:account:queue-name
