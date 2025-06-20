@@ -53,7 +53,7 @@ SERVICES = {
 
 TAG_PRESETS = {
     "asg": [{"Key": "aws:autoscaling:groupName"}],
-    "nabserv": [{"Key": "Name", "Values": ["*nef-jenkins*"]}],
+    "nabserv": [{"Key": "Name", "Values": ["nef-jenkins"], "MatchType": "contains"}],
     "nef2": [{"Key": "HIPmgmtEKS", "Values": ["Yes"]}],
     "cps": [{"Key": "HIPLocked", "Values": ["Yes"]}],
     "wiz": [{"Key": "wiz"}],
@@ -92,8 +92,17 @@ def matches_includes(tags, include_rules):
     for cond in include_rules:
         key = cond["Key"].lower()
         if "Values" in cond:
-            if tag_map.get(key) not in [v.lower() for v in cond["Values"]]:
-                return False
+            tag_value = tag_map.get(key, "")
+            match_type = cond.get("MatchType", "exact").lower()
+            
+            if match_type == "contains":
+                # Substring matching - check if any rule value is contained in the tag value
+                if not any(v.lower() in tag_value for v in cond["Values"]):
+                    return False
+            else:
+                # Default exact matching
+                if tag_value not in [v.lower() for v in cond["Values"]]:
+                    return False
         elif key not in tag_map:
             return False
     return True
@@ -106,9 +115,17 @@ def matches_excludes(tags, exclude_rules):
         val = tag_map.get(key)
         if val:
             if "Values" in cond:
-                for bad_val in cond["Values"]:
-                    if bad_val.lower() in val:
+                match_type = cond.get("MatchType", "contains").lower()  # Default to contains for excludes
+                
+                if match_type == "exact":
+                    # Exact matching for excludes
+                    if val in [v.lower() for v in cond["Values"]]:
                         return True
+                else:
+                    # Default substring matching for excludes (maintains backward compatibility)
+                    for bad_val in cond["Values"]:
+                        if bad_val.lower() in val:
+                            return True
             else:
                 return True
     return False
