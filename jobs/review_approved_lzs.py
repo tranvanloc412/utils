@@ -22,7 +22,6 @@ $ python review_approved_lzs.py \
 import csv
 import sys
 import argparse
-import logging
 from pathlib import Path
 from typing import Dict, Set
 
@@ -50,7 +49,7 @@ def load_approved_lzs(path: Path) -> Set[str]:
 
             lzs.add(first.lower())  # normalise case
 
-    log.info("Loaded %d approved landing zones", len(lzs))
+    logger.info("Loaded %d approved landing zones", len(lzs))
     return lzs
 
 
@@ -77,7 +76,7 @@ def parse_snapshot_report(path: Path) -> Dict[str, int]:
 
             results[lz] = cnt
 
-    log.info("Parsed %d landing zones from snapshot report", len(results))
+    logger.info("Parsed %d landing zones from snapshot report", len(results))
     return results
 
 

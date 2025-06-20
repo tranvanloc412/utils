@@ -116,7 +116,7 @@ def main():
 
     # Generate CSV filename with timestamp
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    csv_file = f"results/old_snapshots_{timestamp}.csv"
+    csv_file = f"results/snapshots_{environment}_{timestamp}.csv"
 
     zones_url = get_zones_url()
     region = get_aws_region()
