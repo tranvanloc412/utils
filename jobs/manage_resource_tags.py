@@ -42,6 +42,9 @@ SERVICES = {
     "ebs": "ec2:volume",
     "asg": "autoscaling:autoScalingGroup",
     "s3": "s3",
+    "sns": "sns",
+    "sqs": "sqs",
+    "lambda": "lambda:function",
     "lb": "elasticloadbalancing:loadbalancer",
     "tg": "elasticloadbalancing:targetgroup",
     "efs": "elasticfilesystem:file-system",
@@ -82,6 +85,9 @@ SERVICE_TAG_RULES = {
         "exclude": TAG_PRESETS["nef2"] + TAG_PRESETS["wiz"] + TAG_PRESETS["nabserv"]
     },
     "rds": {},
+    "sns": {"exclude": TAG_PRESETS["nef2"] + TAG_PRESETS["cps"]},
+    "sqs": {"exclude": TAG_PRESETS["nef2"] + TAG_PRESETS["cps"]},
+    "lambda": {"exclude": TAG_PRESETS["nef2"] + TAG_PRESETS["cps"]},
 }
 
 RESOURCE_TYPES = list(SERVICES.values())
@@ -94,7 +100,7 @@ def matches_includes(tags, include_rules):
         if "Values" in cond:
             tag_value = tag_map.get(key, "")
             match_type = cond.get("MatchType", "exact").lower()
-            
+
             if match_type == "contains":
                 # Substring matching - check if any rule value is contained in the tag value
                 if not any(v.lower() in tag_value for v in cond["Values"]):
@@ -115,8 +121,10 @@ def matches_excludes(tags, exclude_rules):
         val = tag_map.get(key)
         if val:
             if "Values" in cond:
-                match_type = cond.get("MatchType", "contains").lower()  # Default to contains for excludes
-                
+                match_type = cond.get(
+                    "MatchType", "contains"
+                ).lower()  # Default to contains for excludes
+
                 if match_type == "exact":
                     # Exact matching for excludes
                     if val in [v.lower() for v in cond["Values"]]:
@@ -152,16 +160,29 @@ def scan_resources(session) -> List[Tuple[str, Dict[str, str]]]:
 
             # If ResourceType is empty, try to extract from ARN
             if not rtype:
-                # Extract service and resource type from ARN format: arn:aws:service:region:account:resource-type/resource-id
+                # Extract service and resource type from ARN format
                 arn_parts = arn.split(":")
-                if len(arn_parts) >= 6:
+                if len(arn_parts) >= 3:
                     service = arn_parts[2]
-                    resource_part = arn_parts[5]
-                    if "/" in resource_part:
-                        resource_type = resource_part.split("/")[0]
-                        rtype = f"{service}:{resource_type}"
+
+                    # Handle different ARN formats
+                    if service in ["s3", "sns", "sqs"]:
+                        # Services with simplified ARN formats (no region/account)
+                        # S3: arn:aws:s3:::bucket-name
+                        # SNS: arn:aws:sns:region:account:topic-name
+                        # SQS: arn:aws:sqs:region:account:queue-name
+                        rtype = service
+                    elif len(arn_parts) >= 6:
+                        # Standard ARN format: arn:aws:service:region:account:resource-type/resource-id
+                        resource_part = arn_parts[5]
+                        if "/" in resource_part:
+                            resource_type = resource_part.split("/")[0]
+                            rtype = f"{service}:{resource_type}"
+                        else:
+                            rtype = f"{service}:{resource_part}"
                     else:
-                        rtype = f"{service}:{resource_part}"
+                        # Fallback for other services with shorter ARN formats
+                        rtype = service
 
             logger.debug(f"🔍 Processing resource: {arn}, type: {rtype}")
 
