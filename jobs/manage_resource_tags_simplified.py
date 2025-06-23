@@ -66,6 +66,17 @@ class ServiceConfig:
     include_rules: List[Dict] = field(default_factory=list)
     exclude_rules: List[Dict] = field(default_factory=lambda: STANDARD_EXCLUDE)
 
+    # Direct API configuration
+    service_name: str = None  # AWS service name for boto3 client
+    list_method: str = None  # Method to list resources
+    list_key: str = None  # Key in response containing resource list
+    arn_key: str = None  # Key in resource dict containing ARN
+    name_key: str = None  # Key in resource dict containing name
+    tags_method: str = None  # Method to get tags
+    tags_key: str = None  # Key in tags response
+    tags_format: str = "standard"  # "standard", "dict", or "asg"
+    custom_filters: List[str] = field(default_factory=list)  # Custom filter functions
+
 
 # Unified service configuration
 SERVICE_CONFIGS = {
@@ -78,9 +89,27 @@ SERVICE_CONFIGS = {
         resource_type="ec2:volume",
         exclude_rules=STANDARD_EXCLUDE + TAG_PRESETS["asg"],
     ),
-    "asg": ServiceConfig(resource_type="autoscaling:autoScalingGroup"),
+    "asg": ServiceConfig(
+        resource_type="autoscaling:autoScalingGroup",
+        api_method="direct",
+        service_name="autoscaling",
+        list_method="describe_auto_scaling_groups",
+        list_key="AutoScalingGroups",
+        arn_key="AutoScalingGroupARN",
+        name_key="AutoScalingGroupName",
+        tags_format="asg",
+    ),
     "s3": ServiceConfig(resource_type="s3"),
-    "sns": ServiceConfig(resource_type="sns"),
+    "sns": ServiceConfig(
+        resource_type="sns",
+        api_method="direct",
+        service_name="sns",
+        list_method="list_topics",
+        list_key="Topics",
+        arn_key="TopicArn",
+        tags_method="list_tags_for_resource",
+        tags_key="Tags",
+    ),
     "sqs": ServiceConfig(resource_type="sqs"),
     "dynamodb": ServiceConfig(resource_type="dynamodb:table"),
     "cloudwatch": ServiceConfig(resource_type="cloudwatch:alarm"),
@@ -92,10 +121,29 @@ SERVICE_CONFIGS = {
     "sg": ServiceConfig(resource_type="ec2:security-group"),
     "kms": ServiceConfig(resource_type="kms:key"),
     "rds": ServiceConfig(resource_type="rds:db"),
-    "lambda": ServiceConfig(resource_type="lambda:function"),
+    "lambda": ServiceConfig(
+        resource_type="lambda:function",
+        api_method="direct",
+        service_name="lambda",
+        list_method="list_functions",
+        list_key="Functions",
+        arn_key="FunctionArn",
+        name_key="FunctionName",
+        tags_method="list_tags",
+        tags_key="Tags",
+        tags_format="dict",
+    ),
     # Direct API services
-    "iam": ServiceConfig(resource_type="iam:role", api_method="direct"),
-    "route53": ServiceConfig(resource_type="route53:hostedzone", api_method="direct"),
+    "iam": ServiceConfig(
+        resource_type="iam:role",
+        api_method="direct",
+        service_name="iam",
+        list_method="list_roles",
+        list_key="Roles",
+        arn_key="Arn",
+        name_key="RoleName",
+        custom_filters=["iam_role_filter"],
+    ),
 }
 
 
@@ -268,77 +316,135 @@ class ResourceScanner:
     def _scan_with_direct_api(
         self, service_name: str, config: ServiceConfig
     ) -> List[Tuple[str, Dict[str, str]]]:
-        """Scan resources using direct service APIs"""
-        if service_name == "iam":
-            return self._scan_iam_roles(config)
-        elif service_name == "route53":
-            return self._scan_route53_zones(config)
-        else:
-            logger.warning(f"⚠️ Direct API scanning not implemented for {service_name}")
+        """Scan resources using direct service APIs with unified configuration"""
+        if not all(
+            [config.service_name, config.list_method, config.list_key, config.arn_key]
+        ):
+            logger.warning(f"⚠️ Incomplete direct API configuration for {service_name}")
             return []
 
-    def _scan_iam_roles(self, config: ServiceConfig) -> List[Tuple[str, Dict[str, str]]]:
-        """Scan IAM roles"""
-        client = self.session.client("iam")
-        paginator = client.get_paginator("list_roles")
-        matched = []
-        
-        for page in paginator.paginate():
-            for role in page.get("Roles", []):
-                try:
-                    role_name = role["RoleName"]
-                    role_path = role.get("Path", "/")
-                    arn = role["Arn"]
-                    
-                    # Filter out roles that start with TEST or ADES
-                    if role_name.startswith(("TEST", "ADES")):
-                        logger.debug(f"⏭️ Skipping role with excluded prefix: {role_name}")
-                        continue
-                    
-                    # Filter out AWS service-linked roles
-                    if role_path.startswith("/aws-service/"):
-                        logger.debug(f"⏭️ Skipping AWS service-linked role: {role_name}")
-                        continue
-                    
-                    # Add role without checking tags
-                    matched.append((arn, {}))
-                    logger.debug(f"✅ Added IAM role: {arn}")
-                except Exception as e:
-                    logger.debug(f"⚠️ Error processing IAM role {role.get('RoleName', 'unknown')}: {e}")
-        
-        return matched
+        try:
+            client = self.session.client(config.service_name)
 
-    def _scan_route53_zones(
-        self, config: ServiceConfig
-    ) -> List[Tuple[str, Dict[str, str]]]:
-        """Scan Route53 hosted zones"""
-        client = self.session.client("route53")
-        paginator = client.get_paginator("list_hosted_zones")
-        matched = []
-        matcher = TagMatcher(config.include_rules, config.exclude_rules)
+            # Get paginator or use direct method call
+            try:
+                paginator = client.get_paginator(config.list_method)
+                pages = paginator.paginate()
+            except Exception:
+                # Fallback to direct method call if paginator not available
+                response = getattr(client, config.list_method)()
+                pages = [response]
 
-        for page in paginator.paginate():
-            for zone in page.get("HostedZones", []):
-                try:
-                    zone_id = zone["Id"].replace("/hostedzone/", "")
-                    arn = f"arn:aws:route53:::hostedzone/{zone_id}"
+            matched = []
+            matcher = TagMatcher(config.include_rules, config.exclude_rules)
 
-                    response = client.list_tags_for_resource(
-                        ResourceType="hostedzone", ResourceId=zone_id
-                    )
-                    tags = [
-                        {"Key": tag["Key"], "Value": tag["Value"]}
-                        for tag in response.get("ResourceTagSet", {}).get("Tags", [])
-                    ]
+            for page in pages:
+                resources = page.get(config.list_key, [])
 
-                    if matcher.matches(tags):
-                        tag_dict = {t["Key"]: t["Value"] for t in tags}
-                        matched.append((arn, tag_dict))
-                        logger.debug(f"✅ Matched Route53 zone: {arn}")
-                except Exception as e:
-                    logger.debug(f"⚠️ Error processing Route53 zone {zone_id}: {e}")
+                for resource in resources:
+                    try:
+                        arn = resource[config.arn_key]
+                        name = resource.get(config.name_key, "unknown")
 
-        return matched
+                        # Apply custom filters if specified
+                        if config.custom_filters and not self._apply_custom_filters(
+                            resource, config.custom_filters
+                        ):
+                            logger.debug(f"⏭️ Filtered by custom filter: {name}")
+                            continue
+
+                        # Get tags based on configuration
+                        tags, tag_dict = self._get_resource_tags(
+                            client, resource, config
+                        )
+
+                        # Check if resource matches criteria (skip for services without tag matching)
+                        if not config.tags_method or matcher.matches(tags):
+                            matched.append((arn, tag_dict))
+                            logger.debug(f"✅ Added {service_name}: {arn}")
+                        else:
+                            logger.debug(f"⏭️ Filtered out {service_name}: {arn}")
+
+                    except Exception as e:
+                        logger.debug(f"⚠️ Error processing {service_name} resource: {e}")
+
+            return matched
+
+        except Exception as e:
+            logger.error(f"⚠️ Error scanning {service_name} via direct API: {e}")
+            return []
+
+    def _apply_custom_filters(self, resource: Dict, filter_names: List[str]) -> bool:
+        """Apply custom filters to resources"""
+        for filter_name in filter_names:
+            if filter_name == "iam_role_filter":
+                if not self._iam_role_filter(resource):
+                    return False
+        return True
+
+    def _iam_role_filter(self, role: Dict) -> bool:
+        """Custom filter for IAM roles"""
+        role_name = role.get("RoleName", "")
+        role_path = role.get("Path", "/")
+
+        # Filter out roles that start with TEST or ADES
+        if role_name.startswith(("TEST", "ADES")):
+            return False
+
+        # Filter out AWS service-linked roles (both patterns)
+        if role_path.startswith(("/aws-service/", "/aws-service-role/")):
+            return False
+
+        # Filter out AWS managed roles
+        if role_path.startswith("/aws/"):
+            return False
+
+        return True
+
+    def _get_resource_tags(
+        self, client, resource: Dict, config: ServiceConfig
+    ) -> Tuple[List[Dict], Dict[str, str]]:
+        """Get tags for a resource based on configuration"""
+        if not config.tags_method:
+            return [], {}
+
+        try:
+            arn = resource[config.arn_key]
+
+            # Handle different tag retrieval methods
+            if config.tags_format == "asg":
+                # ASG tags are embedded in the resource
+                tags = resource.get("Tags", [])
+                standard_tags = [
+                    {"Key": tag["Key"], "Value": tag.get("Value", "")} for tag in tags
+                ]
+                tag_dict = {tag["Key"]: tag.get("Value", "") for tag in tags}
+                return standard_tags, tag_dict
+
+            elif config.tags_method == "list_tags_for_resource":
+                # SNS-style tag retrieval
+                response = client.list_tags_for_resource(ResourceArn=arn)
+                tags = response.get(config.tags_key, [])
+                tag_dict = {tag["Key"]: tag.get("Value", "") for tag in tags}
+                return tags, tag_dict
+
+            elif config.tags_format == "dict":
+                # Lambda-style tag retrieval (returns dict)
+                response = getattr(client, config.tags_method)(Resource=arn)
+                tags_dict = response.get(config.tags_key, {})
+                tags = [{"Key": k, "Value": v} for k, v in tags_dict.items()]
+                return tags, tags_dict
+
+            else:
+                # Standard tag retrieval
+                response = getattr(client, config.tags_method)(ResourceArn=arn)
+                tags = response.get(config.tags_key, [])
+                tag_dict = {tag["Key"]: tag.get("Value", "") for tag in tags}
+                return tags, tag_dict
+
+        except Exception as e:
+            logger.debug(f"⚠️ Could not get tags for resource {arn}: {e}")
+            return [], {}
 
     def _find_service_by_resource_type(
         self, resource_type: str, service_configs: Dict[str, ServiceConfig]
