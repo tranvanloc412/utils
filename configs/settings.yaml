@@ -1,0 +1,10 @@
+# configs/settings.yaml
+aws:
+  region: "ap-southeast-2"
+  viewer_role: "HIPCMSViewerSpokeRole"
+  provision_role: "HIPCMSProvisionSpokeRole"
+  test_account:
+    id: "954976297051"
+    name: "cmsnonprod"
+
+zones_url: "https://hip.ext.national.com.au/accounts/cms"

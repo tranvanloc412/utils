@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aws-ops"
+version = "1.0.0"
+description = "AWS Operations and Management Tools"
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [{ name = "AWS Ops Team" }]
+classifiers = [
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Systems Administration",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = ["boto3", "pyyaml", "requests", "click", "pydantic"]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "black",
+    "flake8",
+    "mypy",
+    "pre-commit",
+    "sphinx",
+    "moto",       # AWS mocking
+]
+
+[project.scripts]
+aws-ops = "aws_ops.cli:cli"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["aws_ops*"]
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.black]
+line-length = 88
+target-version = ['py312']
+include = '\.pyi?$'
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
