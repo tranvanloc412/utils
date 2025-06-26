@@ -77,22 +77,22 @@ class SessionManager:
         """Create a boto3 Session from environment variables for pipeline usage.
         
         Expected environment variables:
-        - AWS_ACCESS_KEY_ID or AWS_ACCESS_KEY
-        - AWS_SECRET_ACCESS_KEY or AWS_SECRET_KEY  
-        - AWS_SESSION_TOKEN (optional)
+        - AWS_ACCESS_KEY_ID
+        - AWS_SECRET_ACCESS_KEY 
+        - AWS_SESSION_TOKEN
         """
         session_key = f"env:{region}:{session_name}"
         
         if session_key not in cls._sessions:
             # Check for AWS credentials in environment variables
-            access_key = os.getenv('AWS_ACCESS_KEY_ID') or os.getenv('AWS_ACCESS_KEY')
-            secret_key = os.getenv('AWS_SECRET_ACCESS_KEY') or os.getenv('AWS_SECRET_KEY')
+            access_key = os.getenv('AWS_ACCESS_KEY_ID')
+            secret_key = os.getenv('AWS_SECRET_ACCESS_KEY')
             session_token = os.getenv('AWS_SESSION_TOKEN')
             
             if not access_key or not secret_key:
                 raise ValueError(
                     "Missing required environment variables. "
-                    "Please set AWS_ACCESS_KEY_ID/AWS_ACCESS_KEY and AWS_SECRET_ACCESS_KEY/AWS_SECRET_KEY"
+                    "Please set AWS_ACCESS_KEY_IDand AWS_SECRET_ACCESS_KEY/"
                 )
             
             cls._sessions[session_key] = boto3.Session(
