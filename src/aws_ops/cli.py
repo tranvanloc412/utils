@@ -18,7 +18,9 @@ def cli(ctx, config):
 
 
 @cli.command()
-@click.option("--landing-zones", "-l", multiple=True, help="Specific landing zones to scan")
+@click.option(
+    "--landing-zones", "-l", multiple=True, help="Specific landing zones to scan"
+)
 @click.option("--region", "-r", default="ap-southeast-2", help="AWS region to scan")
 @click.option("--output", "--output-file", "-o", help="Output CSV file path")
 @click.option(
@@ -36,7 +38,7 @@ def cli(ctx, config):
 @click.option(
     "--lz-env",
     type=click.Choice(["nonprod", "preprod", "prod"]),
-    help="Filter landing zones by environment suffix (nonprod, preprod, prod)"
+    help="Filter landing zones by environment suffix (nonprod, preprod, prod)",
 )
 @click.option(
     "--test",
@@ -48,6 +50,14 @@ def scan_servers(
     ctx, landing_zones, region, output, platform, env_filter, scan_all, lz_env, test
 ):
     """Scan EC2 servers across AWS landing zones with flexible filtering."""
+    # Validate that only one of lz_env or landing_zones is specified
+    if lz_env and landing_zones and not test:
+        click.echo(
+            "Error: Cannot specify both --lz-env and --landing-zones at the same time. Choose one.",
+            err=True,
+        )
+        ctx.exit(1)
+
     # Handle test account configuration
     if test:
         config_manager = ctx.obj["config"]
@@ -56,14 +66,32 @@ def scan_servers(
         landing_zones = [f"{test_account_name}:{test_account_id}"]
     else:
         landing_zones = list(landing_zones) if landing_zones else None
-    
+
+    # Validate landing zones have consistent environment if multiple specified
+    if landing_zones and len(landing_zones) > 1 and not test:
+        environments = set()
+        for zone in landing_zones:
+            zone_name = zone.split(":")[0] if ":" in zone else zone
+            # Extract environment suffix (nonprod, preprod, prod)
+            for env_suffix in ["nonprod", "preprod", "prod"]:
+                if zone_name.lower().endswith(env_suffix):
+                    environments.add(env_suffix)
+                    break
+
+        if len(environments) > 1:
+            click.echo(
+                f"Error: All landing zones must belong to the same environment. Found: {', '.join(environments)}",
+                err=True,
+            )
+            ctx.exit(1)
+
     # Filter landing zones by environment suffix if lz_env is specified
     if lz_env and not test:
         config_manager = ctx.obj["config"]
         all_landing_zones = config_manager.get_all_landing_zones()
         filtered_zones = []
         for zone in all_landing_zones:
-            zone_name = zone.split(':')[0] if ':' in zone else zone
+            zone_name = zone.split(":")[0] if ":" in zone else zone
             if zone_name.lower().endswith(lz_env.lower()):
                 filtered_zones.append(zone)
         landing_zones = filtered_zones if filtered_zones else landing_zones

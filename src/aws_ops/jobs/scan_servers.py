@@ -106,7 +106,15 @@ def scan_ec2_servers(
             server = create_server_info(instance)
             server_dict = server.to_dict()
             server_dict["LandingZone"] = zone_name
-            server_dict["Environment"] = server.tags.get("Environment", "N/A")
+
+            # Extract environment from landing zone name
+            lz_env = "N/A"
+            zone_name_lower = zone_name.lower()
+            for env_suffix in ["nonprod", "preprod", "prod"]:
+                if zone_name_lower.endswith(env_suffix):
+                    lz_env = env_suffix
+                    break
+            server_dict["Environment"] = lz_env
 
             # Apply post-filtering if needed
             if _should_include_server(server_dict, params):
@@ -154,15 +162,13 @@ def write_csv_report(
 
     # Generate report
     result = generator.generate_report(
-        data=servers,
-        filename=filename,
-        scan_type=f"{scan_type}_servers"
+        data=servers, filename=filename, scan_type=f"{scan_type}_servers"
     )
-    
+
     # The generator already returns the full path in the result
-    output_file = result.get('filename', 'report.csv')
+    output_file = result.get("filename", "report.csv")
     output_path = Path(config.output_dir) / output_file
-    
+
     print(f"EC2 servers report written to {output_path}")
     print(f"Total servers found: {len(servers)}")
 
