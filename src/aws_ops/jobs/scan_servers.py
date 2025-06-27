@@ -28,6 +28,7 @@ class ScanParameters:
     env_filter: Optional[str] = None
     scan_all: bool = False
     output: Optional[str] = None
+    lz_env: Optional[str] = None
 
     def get_scan_type(self) -> str:
         """Determine scan type for reporting."""
@@ -44,6 +45,8 @@ class ScanParameters:
             filters.append(f"Platform: {self.platform}")
         if self.env_filter:
             filters.append(f"Environment: {self.env_filter}")
+        if self.lz_env:
+            filters.append(f"Landing Zone Env: {self.lz_env}")
         if self.scan_all:
             filters.append("Scan all instances")
         return ", ".join(filters) if filters else "No filters"
@@ -176,6 +179,7 @@ class ScanServers(BaseJob):
         platform: Optional[str] = None,
         env_filter: Optional[str] = None,
         scan_all: bool = False,
+        lz_env: Optional[str] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """Execute the server scanning job.
@@ -188,6 +192,7 @@ class ScanServers(BaseJob):
             platform: Platform filter (windows or linux)
             env_filter: Environment tag filter
             scan_all: Scan all instances regardless of platform
+            lz_env: Landing zone environment filter (nonprod, preprod, prod)
             **kwargs: Additional parameters
 
         Returns:
@@ -199,6 +204,7 @@ class ScanServers(BaseJob):
             env_filter=env_filter,
             scan_all=scan_all,
             output=output,
+            lz_env=lz_env,
         )
 
         processor = ZoneProcessor(

@@ -18,7 +18,7 @@ def cli(ctx, config):
 
 
 @cli.command()
-@click.option("--landing-zones", multiple=True, help="Specific landing zones to scan")
+@click.option("--landing-zones", "-l", multiple=True, help="Specific landing zones to scan")
 @click.option("--region", "-r", default="ap-southeast-2", help="AWS region to scan")
 @click.option("--output", "--output-file", "-o", help="Output CSV file path")
 @click.option(
@@ -34,13 +34,18 @@ def cli(ctx, config):
     "--scan-all", is_flag=True, help="Scan all EC2 instances regardless of platform"
 )
 @click.option(
+    "--lz-env",
+    type=click.Choice(["nonprod", "preprod", "prod"]),
+    help="Filter landing zones by environment suffix (nonprod, preprod, prod)"
+)
+@click.option(
     "--test",
     is_flag=True,
     help="Use test account configuration from settings.yaml (overrides --landing-zones)",
 )
 @click.pass_context
 def scan_servers(
-    ctx, landing_zones, region, output, platform, env_filter, scan_all, test
+    ctx, landing_zones, region, output, platform, env_filter, scan_all, lz_env, test
 ):
     """Scan EC2 servers across AWS landing zones with flexible filtering."""
     # Handle test account configuration
@@ -51,6 +56,17 @@ def scan_servers(
         landing_zones = [f"{test_account_name}:{test_account_id}"]
     else:
         landing_zones = list(landing_zones) if landing_zones else None
+    
+    # Filter landing zones by environment suffix if lz_env is specified
+    if lz_env and not test:
+        config_manager = ctx.obj["config"]
+        all_landing_zones = config_manager.get_all_landing_zones()
+        filtered_zones = []
+        for zone in all_landing_zones:
+            zone_name = zone.split(':')[0] if ':' in zone else zone
+            if zone_name.lower().endswith(lz_env.lower()):
+                filtered_zones.append(zone)
+        landing_zones = filtered_zones if filtered_zones else landing_zones
 
     job = ScanServers(ctx.obj["config"])
     job.execute(
@@ -60,12 +76,13 @@ def scan_servers(
         platform=platform,
         env_filter=env_filter,
         scan_all=scan_all,
+        lz_env=lz_env,
     )
 
 
 @cli.command()
 @click.option(
-    "--landing-zones", multiple=True, help="Specific landing zones to process"
+    "--landing-zones", "-l", multiple=True, help="Specific landing zones to process"
 )
 @click.option(
     "--region", "-r", default="ap-southeast-2", help="AWS region to operate in"
@@ -112,7 +129,7 @@ def start_servers(ctx, landing_zones, region, server_name, start_all, dry_run, t
 
 @cli.command()
 @click.option(
-    "--landing-zones", multiple=True, help="Specific landing zones to process"
+    "--landing-zones", "-l", multiple=True, help="Specific landing zones to process"
 )
 @click.option(
     "--region", "-r", default="ap-southeast-2", help="AWS region to operate in"
@@ -159,7 +176,7 @@ def stop_servers(ctx, landing_zones, region, server_name, stop_all, dry_run, tes
 
 @cli.command()
 @click.option(
-    "--landing-zones", multiple=True, help="Specific landing zones to process"
+    "--landing-zones", "-l", multiple=True, help="Specific landing zones to process"
 )
 @click.option(
     "--region", "-r", default="ap-southeast-2", help="AWS region to operate in"
@@ -219,7 +236,7 @@ def scan_backups(
 
 @cli.command()
 @click.option(
-    "--landing-zones", multiple=True, help="Specific landing zones to process"
+    "--landing-zones", "-l", multiple=True, help="Specific landing zones to process"
 )
 @click.option(
     "--region", "-r", default="ap-southeast-2", help="AWS region to operate in"
@@ -270,7 +287,7 @@ def delete_old_snapshots(ctx, landing_zones, region, age_days, dry_run, test):
 
 @cli.command()
 @click.option(
-    "--landing-zones", multiple=True, help="Specific landing zones to process"
+    "--landing-zones", "-l", multiple=True, help="Specific landing zones to process"
 )
 @click.option(
     "--region", "-r", default="ap-southeast-2", help="AWS region to operate in"
@@ -321,7 +338,7 @@ def delete_old_amis(ctx, landing_zones, region, age_days, dry_run, test):
 
 @cli.command()
 @click.option(
-    "--landing-zones", multiple=True, help="Specific landing zones to process"
+    "--landing-zones", "-l", multiple=True, help="Specific landing zones to process"
 )
 @click.option(
     "--region", "-r", default="ap-southeast-2", help="AWS region to operate in"
