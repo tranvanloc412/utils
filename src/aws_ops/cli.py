@@ -1,11 +1,13 @@
 # src/aws_ops/cli.py
 import click
+import requests
 from aws_ops.jobs import (
     ScanServers,
     ManageServers,
     ManageBackups,
 )
 from aws_ops.utils.config import ConfigManager
+from aws_ops.utils.lz import fetch_zones_from_url
 
 
 @click.group()
@@ -88,13 +90,30 @@ def scan_servers(
     # Filter landing zones by environment suffix if lz_env is specified
     if lz_env and not test:
         config_manager = ctx.obj["config"]
-        all_landing_zones = config_manager.get_all_landing_zones()
-        filtered_zones = []
-        for zone in all_landing_zones:
-            zone_name = zone.split(":")[0] if ":" in zone else zone
-            if zone_name.lower().endswith(lz_env.lower()):
-                filtered_zones.append(zone)
-        landing_zones = filtered_zones if filtered_zones else landing_zones
+        zones_url = config_manager.get_zones_url()
+        if zones_url:
+            try:
+                all_zone_lines = fetch_zones_from_url(zones_url)
+                filtered_zones = []
+                for zone_line in all_zone_lines:
+                    parts = zone_line.split()
+                    if len(parts) >= 2:
+                        zone_name = parts[1]
+                        if zone_name.lower().endswith(lz_env.lower()):
+                            filtered_zones.append(zone_name)
+                    else:
+                        click.echo(f"Warning: Skipping malformed zone line: {zone_line}", err=True)
+                
+                if filtered_zones:
+                    landing_zones = filtered_zones
+                else:
+                    click.echo(f"Warning: No landing zones found matching environment '{lz_env}'", err=True)
+            except requests.RequestException as e:
+                click.echo(f"Error fetching landing zones from {zones_url}: {e}", err=True)
+                ctx.exit(1)
+        else:
+            click.echo("Error: No zones URL configured", err=True)
+            ctx.exit(1)
 
     job = ScanServers(ctx.obj["config"])
     job.execute(
