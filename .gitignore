@@ -53,6 +53,7 @@ logs/
 # AWS
 .aws/
 credentials
+configs/
 
 # Temporary files
 *.tmp
@@ -62,4 +63,3 @@ credentials
 
 # Results
 reports/
-examples/
