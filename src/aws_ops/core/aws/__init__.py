@@ -1,11 +1,11 @@
-"""AWS Core Module
-
-This module provides core AWS functionality for the aws-ops package.
-"""
+"""AWS core modules."""
 
 from .ec2 import EC2Manager, create_ec2_manager
+from .ssm import SSMManager, create_ssm_manager
 
 __all__ = [
-    'EC2Manager',
-    'create_ec2_manager'
+    "EC2Manager",
+    "create_ec2_manager",
+    "SSMManager",
+    "create_ssm_manager",
 ]

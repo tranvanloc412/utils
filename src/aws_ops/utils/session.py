@@ -11,6 +11,9 @@ import boto3
 import os
 from typing import Dict, Optional
 from botocore.exceptions import ClientError
+from .logger import setup_logger
+
+logger = setup_logger(__name__, "session.log")
 
 
 def assume_role(

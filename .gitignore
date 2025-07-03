@@ -53,7 +53,7 @@ logs/
 # AWS
 .aws/
 credentials
-configs/*
+
 
 # Temporary files
 *.tmp
@@ -62,4 +62,6 @@ configs/*
 *.backup
 
 # Results
-reports/
+results/
+
+configs/settings.example.yml

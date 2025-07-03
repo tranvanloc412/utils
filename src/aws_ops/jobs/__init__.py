@@ -2,12 +2,18 @@
 
 from .base import BaseJob
 from .scan_servers import ScanServers
-from .manage_servers import ManageServers
-from .manage_backups import ManageBackups
+from .start_servers import StartServersJob
+from .stop_servers import StopServersJob
+from .scan_backups import ScanBackups
+from .cleanup_snapshots import CleanupSnapshotsJob
+from .update_ami import UpdateAMIJob
 
 __all__ = [
     "BaseJob",
     "ScanServers",
-    "ManageServers",
-    "ManageBackups",
+    "StartServersJob",
+    "StopServersJob",
+    "ScanBackups",
+    "CleanupSnapshotsJob",
+    "UpdateAMIJob",
 ]

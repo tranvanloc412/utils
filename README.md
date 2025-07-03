@@ -1,196 +1,272 @@
-# AWS Ops
+# AWS Ops - Simplified Version
 
-A Python toolkit for managing AWS operations including snapshot cleanup, landing zone management, and approval workflows.
+> Enterprise AWS operations toolkit - streamlined for easier deployment and maintenance
 
-## Requirements
+## Overview
 
-- Python 3.8 or higher
-- AWS credentials configured (Jump Viewer or Provision role)
+AWS Ops provides essential cloud operations capabilities for enterprise environments, with a focus on simplicity and reliability.
 
-## Installation
+### Key Features
+
+- **Server Management**: Start/stop EC2 instances across multiple accounts
+- **Backup Operations**: Scan and cleanup old snapshots and AMIs
+- **Infrastructure Updates**: Update launch templates with latest AMIs
+- **Multi-Account Support**: Operate across landing zones and accounts
+- **Safety Features**: Dry-run mode and confirmation prompts
+- **Audit Logging**: Track all operations for compliance
+
+## Quick Start
+
+### 1. Installation
 
 ```bash
-# Clone the repository
+# Clone repository
 git clone <repository-url>
-cd aws-ops
+cd ops
 
-# Run the installation script
-./scripts/install.sh
+# Install dependencies
+pip install -e .
 ```
 
-The installation script will:
+### 2. Configuration
 
-- Create a virtual environment automatically
-- Install the aws-ops package and dependencies
-- Optionally install development dependencies
-- Verify the installation
-
-After installation, activate the virtual environment:
+Copy and customize the configuration:
 
 ```bash
-source venv/bin/activate
+cp configs/settings.yml.example configs/settings.yml
 ```
 
-## Available Tools
+Edit `configs/settings.yml` with your AWS settings:
 
-AWS Ops provides multiple ways to run commands, from simple unified CLI to individual scripts:
+```yaml
+aws:
+  region: "your-region"
+  roles:
+    viewer: "YourViewerRole"
+    provision: "YourProvisionRole"
+```
 
-### 🚀 Unified CLI (Recommended)
+### 3. AWS Credentials
 
-#### Option 1: Simple Wrapper (No Installation Required)
+Set up AWS credentials using one of these methods:
 
 ```bash
-# macOS/Linux
-./aws-ops scan-servers --environment prod
-./aws-ops list-snapshots --days 30
-./aws-ops delete-backups --days 45 --dry-run
+# Option 1: AWS CLI
+aws configure
 
-# Windows
-aws-ops scan-servers --environment prod
-aws-ops list-snapshots --days 30
-aws-ops delete-backups --days 45 --dry-run
+# Option 2: Environment variables
+export AWS_ACCESS_KEY_ID=your-key
+export AWS_SECRET_ACCESS_KEY=your-secret
+export AWS_DEFAULT_REGION=ap-southeast-2
+
+# Option 3: IAM roles (recommended for EC2)
+# Use instance profiles or assume roles
 ```
 
-#### Option 2: Python CLI (No Installation Required)
+## Usage
+
+### Using CLI
 
 ```bash
-python3 aws_ops.py scan-servers --environment prod
-python3 aws_ops.py list-snapshots --days 30
-python3 aws_ops.py delete-backups --days 45 --dry-run
+# Use the CLI
+aws-ops --help
+
+# Or use the module directly
+python -m aws_ops.cli --help
 ```
 
-#### Option 3: Console Scripts (After Installation)
+### Common Operations
+
+#### Server Management
 
 ```bash
-# Available after pip install -e .
-aws-ops scan-servers --environment prod
-awsops list-snapshots --days 30  # Short alias
+# Scan servers
+aws-ops scan-servers --landing-zones prod:123456789
 
-# Legacy individual commands still work
-scan-windows-servers --help
-list-old-snapshots --days 30
+# Start servers (with confirmation)
+aws-ops start-servers --name "web-*" --landing-zones prod:123456789
+
+# Stop servers (dry run first)
+aws-ops stop-servers --name "web-*" --dry-run
 ```
 
-### 📋 Traditional Methods
-
-#### Module Execution
+#### Backup Operations
 
 ```bash
-# Run from project root
-python -m jobs.delete_old_backups --days 31 --dry-run
-python -m jobs.list_old_snapshots --days 30
-python -m jobs.scan_windows_servers --environment prod
+# Scan backup status
+aws-ops scan-backups --days 30 --output backup-report.csv
+
+# Cleanup old snapshots (dry run first)
+aws-ops cleanup-snapshots --days 90 --dry-run
+
+# Execute cleanup
+aws-ops cleanup-snapshots --days 90 --force
 ```
 
-#### Direct Script Execution
+#### Infrastructure Updates
 
 ```bash
-# After installation or with PYTHONPATH
-python jobs/delete_old_backups.py --days 31 --dry-run
-python jobs/list_old_snapshots.py --environment prod --days 45
-python jobs/review_approved_lzs.py --approved approved_lzs.csv --report snapshot_report.csv
+# Update launch template AMI
+aws-ops update-ami --template "web-template" --dry-run
 ```
 
-### 📖 Command Reference
+### Safety Features
 
-| Command          | Description                                        | Example                                          |
-| ---------------- | -------------------------------------------------- | ------------------------------------------------ |
-| `scan-servers`   | Scan Windows servers across landing zones          | `./aws-ops scan-servers --environment prod`      |
-| `list-snapshots` | Generate reports of old snapshots with CSV output  | `./aws-ops list-snapshots --days 30 --csv`       |
-| `delete-backups` | Delete old AMIs and snapshots across landing zones | `./aws-ops delete-backups --days 45 --dry-run`   |
-| `run-ssm`        | Execute SSM commands across multiple landing zones | `./aws-ops run-ssm --command "systemctl status"` |
-| `manage-tags`    | Manage resource tags across AWS                    | `./aws-ops manage-tags --action add --key Env`   |
-| `review-lzs`     | Review approved landing zones against reports      | `./aws-ops review-lzs --approved lzs.csv`        |
+- **Dry Run**: Use `--dry-run` to preview changes
+- **Confirmation**: Interactive prompts for destructive operations
+- **Force**: Use `--force` to skip confirmations (automation)
+- **Verbose**: Use `--verbose` for detailed output
 
-### 🆘 Getting Help
+## Configuration
+
+### Configuration Settings
+
+The `settings.yml` includes essential configurations:
+
+```yaml
+# Basic AWS settings
+aws:
+  region: "ap-southeast-2"
+  roles:
+    viewer: "ViewerRole"
+    provision: "ProvisionRole"
+
+# Security essentials
+security:
+  require_mfa: true
+  audit_logging: true
+
+# Performance limits
+performance:
+  batch_size: 50
+  timeout: 300
+  retry_attempts: 3
+
+# Feature flags
+features:
+  dry_run: true
+  confirmation_prompts: true
+```
+
+### Environment Variables
 
 ```bash
-# General help
-./aws-ops
-./aws-ops --help
-
-# Command-specific help
-./aws-ops scan-servers --help
-./aws-ops list-snapshots --help
-./aws-ops delete-backups --help
+# Override configuration
+export AWS_OPS_CONFIG=/path/to/custom/settings.yml
+export AWS_OPS_REGION=us-west-2
+export AWS_OPS_DRY_RUN=true
 ```
 
-## Utilities and Examples
+## Security
 
-### ZoneProcessor Utility
+### Best Practices
 
-Standardized utility for processing AWS landing zones with built-in error handling, logging, and result aggregation.
+1. **Use IAM Roles**: Prefer IAM roles over access keys
+2. **Least Privilege**: Grant minimum required permissions
+3. **MFA**: Enable multi-factor authentication
+4. **Audit Logs**: Monitor all operations
+5. **Dry Run**: Always test with `--dry-run` first
+
+### Required Permissions
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeInstances",
+        "ec2:StartInstances",
+        "ec2:StopInstances",
+        "ec2:DescribeSnapshots",
+        "ec2:DeleteSnapshot",
+        "ec2:DescribeLaunchTemplates",
+        "ec2:ModifyLaunchTemplate"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Configuration Error**
+   ```bash
+   # Check configuration
+   python -c "from aws_ops.utils.config import ConfigManager; print(ConfigManager().config)"
+   ```
+
+2. **AWS Credentials**
+   ```bash
+   # Test AWS access
+   aws sts get-caller-identity
+   ```
+
+3. **Permission Denied**
+   - Verify IAM roles and policies
+   - Check assume role permissions
+
+4. **Timeout Issues**
+   - Increase timeout in configuration
+   - Check network connectivity
+
+### Debug Mode
 
 ```bash
-# See examples
-python examples/zone_processor_example.py
+# Enable verbose logging
+aws-ops scan-servers --verbose
 
-# Documentation
-cat utils/README_zone_processor.md
+# Check logs
+tail -f /var/log/aws-ops/aws-ops.log
 ```
 
-### ConfigManager
+## Migration Guide
 
-Simplified configuration management with environment variable overrides and dot notation access.
+If migrating from previous versions:
+
+1. **Configuration**: Update `settings.yml` with new format
+2. **CLI**: Use `aws-ops` command or `python -m aws_ops.cli`
+3. **Dependencies**: Install with updated Python 3.12+ requirements
+4. **Logging**: Updated logging format
+
+### Feature Comparison
+
+| Feature | Status |
+|---------|--------|
+| Server Management | ✅ |
+| Backup Operations | ✅ |
+| AMI Updates | ✅ |
+| Audit Logging | ✅ |
+| Multi-Account Support | ✅ |
+| Enterprise Config | ✅ |
+| Safety Features | ✅ |
+| Compliance Features | ✅ |
+
+## Support
+
+### Getting Help
 
 ```bash
-# See examples
-python examples/config_manager_example.py
+# Command help
+aws-ops --help
+aws-ops scan-servers --help
 
-# Documentation
-cat README_config_manager.md
+# Version info
+aws-ops --version
 ```
 
-### Package Setup
+### Contributing
 
-Learn about avoiding sys.path manipulation and proper Python packaging:
+1. Fork the repository
+2. Create feature branch
+3. Make changes
+4. Test thoroughly
+5. Submit pull request
 
-```bash
-cat README_package_setup.md
-```
+## License
 
-## Development
-
-### Code Quality Tools (if installed with dev dependencies)
-
-```bash
-# Format code
-black .
-
-# Lint code
-flake8 .
-
-# Type checking
-mypy .
-
-# Run tests
-pytest tests/
-```
-
-### Project Structure
-
-```plain
-aws-ops/
-├── src/
-│   └── aws_ops/       # Main package
-│       ├── cli/       # CLI interface
-│       ├── core/      # Core business logic
-│       ├── jobs/      # Job implementations
-│       └── utils/     # Utilities
-├── tests/             # Test suite
-├── docs/              # Documentation
-├── scripts/           # Installation and utility scripts
-└── pyproject.toml     # Modern Python packaging
-```
-
-## Output
-
-- Console output with progress and summary
-- CSV reports saved to `results/` directory
-- Detailed logging for audit trails
-
-## Safety Features
-
-- Dry-run mode available for testing
-- Comprehensive logging
-- Input validation and error handling
+Enterprise License - See LICENSE file for details.

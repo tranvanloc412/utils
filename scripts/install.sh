@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # AWS Ops Installation Script
-# Simple setup for aws-ops development environment
+# Setup for aws-ops development environment
 
 set -e
 
@@ -49,13 +49,18 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
     python3 -m pip install -e ".[dev]"
 fi
 
-# Simple verification
+# Verify installation
 info "Verifying installation..."
 python3 -m pip show aws-ops >/dev/null || error "Installation failed"
+
+# Test CLI access
+info "Testing CLI access..."
+python3 -c "import aws_ops.cli; print('CLI module loaded successfully')" || error "CLI import failed"
 
 success "Installation completed!"
 echo
 info "Usage: aws-ops --help"
+info "Alternative: python -m aws_ops.cli --help"
 if [[ -n "$VIRTUAL_ENV" ]]; then
     info "Virtual environment: $VIRTUAL_ENV"
 fi

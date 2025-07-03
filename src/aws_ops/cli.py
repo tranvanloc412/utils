@@ -1,431 +1,175 @@
-# src/aws_ops/cli.py
+#!/usr/bin/env python3
+"""
+AWS Ops - Enterprise CLI
+Enterprise AWS operations toolkit with enhanced security and compliance
+"""
+
 import click
-import requests
-from aws_ops.jobs import (
-    ScanServers,
-    ManageServers,
-    ManageBackups,
+import sys
+from pathlib import Path
+
+
+# Add src to path for imports
+src_path = Path(__file__).parent.parent.parent / "src"
+sys.path.insert(0, str(src_path))
+
+# Import validation helpers and error handling
+from .utils.decorators import (
+    server_operation,
+    backup_operation,
+    ami_operation,
 )
-from aws_ops.utils.config import ConfigManager
-from aws_ops.utils.lz import fetch_zones_from_url
+from aws_ops.utils.logger import setup_logger
+
+
+def setup_logging(verbose: bool = False):
+    level = "DEBUG" if verbose else "INFO"
+    return setup_logger("aws_ops_cli", "cli.log", level)
+
+
+# Common CLI options
+def add_common_options(func):
+    func = click.option("--landing-zones", "-l", help="Landing zones")(func)
+    func = click.option("--force", is_flag=True, help="Skip confirmation prompts")(func)
+    func = click.option("--verbose", is_flag=True, help="Enable verbose output")(func)
+    func = click.option(
+        "--dry-run", is_flag=True, help="Preview changes without executing"
+    )(func)
+    func = click.option(
+        "--managed-by", 
+        default="CMS",
+        type=click.Choice(["CMS", "all"], case_sensitive=False),
+        help="Filter by management type: CMS or all (default: CMS)"
+    )(func)
+
+    return func
 
 
 @click.group()
-@click.option("--config", help="Configuration file path")
+@click.option("--region", default="ap-southeast-2", help="AWS region")
 @click.pass_context
-def cli(ctx, config):
-    """AWS Operations CLI."""
+def cli(ctx, region):
+    """AWS Ops - Simplified Enterprise Cloud Operations"""
     ctx.ensure_object(dict)
-    ctx.obj["config"] = ConfigManager(config)
+
+    # Store simple configuration
+    ctx.obj["region"] = region
 
 
 @cli.command()
-@click.option(
-    "--landing-zones", "-l", multiple=True, help="Specific landing zones to scan"
-)
-@click.option("--region", "-r", default="ap-southeast-2", help="AWS region to scan")
-@click.option("--output", "--output-file", "-o", help="Output CSV file path")
-@click.option(
-    "--platform",
-    "-p",
-    type=click.Choice(["windows", "linux"]),
-    help="Filter by platform (windows or linux)",
-)
-@click.option(
-    "--env-filter", help="Filter by Environment tag value (e.g., prod, dev, test)"
-)
-@click.option(
-    "--scan-all", is_flag=True, help="Scan all EC2 instances regardless of platform"
-)
-@click.option(
-    "--lz-env",
-    type=click.Choice(["nonprod", "preprod", "prod"]),
-    help="Filter landing zones by environment suffix (nonprod, preprod, prod)",
-)
-@click.option(
-    "--test",
-    is_flag=True,
-    help="Use test account configuration from settings.yaml (overrides --landing-zones)",
-)
+@click.option("--output", type=click.Path(), help="Output file path")
+@add_common_options
 @click.pass_context
-def scan_servers(
-    ctx, landing_zones, region, output, platform, env_filter, scan_all, lz_env, test
-):
-    """Scan EC2 servers across AWS landing zones with flexible filtering."""
-    # Validate that only one of lz_env or landing_zones is specified
-    if lz_env and landing_zones and not test:
-        click.echo(
-            "Error: Cannot specify both --lz-env and --landing-zones at the same time. Choose one.",
-            err=True,
-        )
-        ctx.exit(1)
-
-    # Handle test account configuration
-    if test:
-        config_manager = ctx.obj["config"]
-        test_account_id = config_manager.get_test_account_id()
-        test_account_name = config_manager.get_test_account_name()
-        landing_zones = [f"{test_account_name}:{test_account_id}"]
-    else:
-        landing_zones = list(landing_zones) if landing_zones else None
-
-    # Validate landing zones have consistent environment if multiple specified
-    if landing_zones and len(landing_zones) > 1 and not test:
-        environments = set()
-        for zone in landing_zones:
-            zone_name = zone.split(":")[0] if ":" in zone else zone
-            # Extract environment suffix (nonprod, preprod, prod)
-            for env_suffix in ["nonprod", "preprod", "prod"]:
-                if zone_name.lower().endswith(env_suffix):
-                    environments.add(env_suffix)
-                    break
-
-        if len(environments) > 1:
-            click.echo(
-                f"Error: All landing zones must belong to the same environment. Found: {', '.join(environments)}",
-                err=True,
-            )
-            ctx.exit(1)
-
-    # Filter landing zones by environment suffix if lz_env is specified
-    if lz_env and not test:
-        config_manager = ctx.obj["config"]
-        zones_url = config_manager.get_zones_url()
-        if zones_url:
-            try:
-                all_zone_lines = fetch_zones_from_url(zones_url)
-                filtered_zones = []
-                for zone_line in all_zone_lines:
-                    parts = zone_line.split()
-                    if len(parts) >= 2:
-                        zone_name = parts[1]
-                        if zone_name.lower().endswith(lz_env.lower()):
-                            filtered_zones.append(zone_name)
-                    else:
-                        click.echo(f"Warning: Skipping malformed zone line: {zone_line}", err=True)
-                
-                if filtered_zones:
-                    landing_zones = filtered_zones
-                else:
-                    click.echo(f"Warning: No landing zones found matching environment '{lz_env}'", err=True)
-            except requests.RequestException as e:
-                click.echo(f"Error fetching landing zones from {zones_url}: {e}", err=True)
-                ctx.exit(1)
-        else:
-            click.echo("Error: No zones URL configured", err=True)
-            ctx.exit(1)
-
-    job = ScanServers(ctx.obj["config"])
-    job.execute(
-        landing_zones=landing_zones,
-        region=region,
-        output=output,
-        platform=platform,
-        env_filter=env_filter,
-        scan_all=scan_all,
-        lz_env=lz_env,
-    )
+@server_operation(requires_confirmation=False)
+def scan_servers(ctx, output, landing_zones, dry_run, verbose, force, managed_by):
+    """Scan EC2 servers across landing zones"""
+    setup_logging(verbose)
+    # All processing logic is handled by the decorator
+    pass
 
 
 @cli.command()
-@click.option(
-    "--landing-zones", "-l", multiple=True, help="Specific landing zones to process"
-)
-@click.option(
-    "--region", "-r", default="ap-southeast-2", help="AWS region to operate in"
-)
-@click.option("--server-name", help="Specific server name to start")
-@click.option(
-    "--start-all", is_flag=True, help="Start all stopped servers in the landing zone(s)"
-)
-@click.option(
-    "--dry-run", is_flag=True, help="Preview operations without executing them"
-)
-@click.option(
-    "--test",
-    is_flag=True,
-    help="Use test account configuration from settings.yaml (overrides --landing-zones)",
-)
+@click.option("--name", help="Server name pattern (optional - if not provided, operates on all servers based on managed_by filter)")
+@click.option("--all", "start_all", is_flag=True, help="Start all servers (equivalent to not providing --name)")
+@add_common_options
 @click.pass_context
-def start_servers(ctx, landing_zones, region, server_name, start_all, dry_run, test):
-    """Start EC2 servers by name or all servers in a specific landing zone."""
-    # Handle test account configuration
-    if test:
-        config_manager = ctx.obj["config"]
-        test_account_id = config_manager.get_test_account_id()
-        test_account_name = config_manager.get_test_account_name()
-        landing_zones = [f"{test_account_name}:{test_account_id}"]
-    else:
-        landing_zones = list(landing_zones) if landing_zones else None
-
-    job = ManageServers(ctx.obj["config"])
-    result = job.execute(
-        landing_zones=landing_zones,
-        region=region,
-        server_name=server_name,
-        action="start",
-        process_all=start_all,
-        dry_run=dry_run,
-    )
-
-    # Exit with appropriate code
-    if not result.get("success", False):
-        click.echo(f"Error: {result.get('error', 'Unknown error occurred')}", err=True)
-        ctx.exit(1)
+@server_operation(requires_confirmation=True)
+def start_servers(ctx, name, start_all, landing_zones, dry_run, verbose, force, managed_by):
+    """Start EC2 servers
+    
+    If --name is not provided, starts all servers with managed_by filter (CMS by default).
+    Use --managed-by=all to operate on all servers regardless of management type.
+    """
+    setup_logging(verbose)
+    # All processing logic is handled by the decorator
+    pass
 
 
 @cli.command()
-@click.option(
-    "--landing-zones", "-l", multiple=True, help="Specific landing zones to process"
-)
-@click.option(
-    "--region", "-r", default="ap-southeast-2", help="AWS region to operate in"
-)
-@click.option("--server-name", help="Specific server name to stop")
-@click.option(
-    "--stop-all", is_flag=True, help="Stop all running servers in the landing zone(s)"
-)
-@click.option(
-    "--dry-run", is_flag=True, help="Preview operations without executing them"
-)
-@click.option(
-    "--test",
-    is_flag=True,
-    help="Use test account configuration from settings.yaml (overrides --landing-zones)",
-)
+@click.option("--name", help="Server name pattern (optional - if not provided, operates on all servers based on managed_by filter)")
+@click.option("--all", "stop_all", is_flag=True, help="Stop all servers (equivalent to not providing --name)")
+@add_common_options
 @click.pass_context
-def stop_servers(ctx, landing_zones, region, server_name, stop_all, dry_run, test):
-    """Stop EC2 servers by name or all servers in a specific landing zone."""
-    # Handle test account configuration
-    if test:
-        config_manager = ctx.obj["config"]
-        test_account_id = config_manager.get_test_account_id()
-        test_account_name = config_manager.get_test_account_name()
-        landing_zones = [f"{test_account_name}:{test_account_id}"]
-    else:
-        landing_zones = list(landing_zones) if landing_zones else None
-
-    job = ManageServers(ctx.obj["config"])
-    result = job.execute(
-        landing_zones=landing_zones,
-        region=region,
-        server_name=server_name,
-        action="stop",
-        process_all=stop_all,
-        dry_run=dry_run,
-    )
-
-    # Exit with appropriate code
-    if not result.get("success", False):
-        click.echo(f"Error: {result.get('error', 'Unknown error occurred')}", err=True)
-        ctx.exit(1)
+@server_operation(requires_confirmation=True)
+def stop_servers(ctx, name, stop_all, landing_zones, dry_run, verbose, force, managed_by):
+    """Stop EC2 servers
+    
+    If --name is not provided, stops all servers with managed_by filter (CMS by default).
+    Use --managed-by=all to operate on all servers regardless of management type.
+    """
+    setup_logging(verbose)
+    # All processing logic is handled by the decorator
+    pass
 
 
 @cli.command()
-@click.option(
-    "--landing-zones", "-l", multiple=True, help="Specific landing zones to process"
-)
-@click.option(
-    "--region", "-r", default="ap-southeast-2", help="AWS region to operate in"
-)
-@click.option(
-    "--output", "--output-file", "-o", help="Output CSV file path for backup report"
-)
-@click.option(
-    "--snapshot-age-days",
-    type=int,
-    default=30,
-    help="Age threshold for snapshots in days (default: 30)",
-)
-@click.option(
-    "--ami-age-days",
-    type=int,
-    default=90,
-    help="Age threshold for AMIs in days (default: 90)",
-)
-@click.option(
-    "--test",
-    is_flag=True,
-    help="Use test account configuration from settings.yaml (overrides --landing-zones)",
-)
+@click.option("--days", type=int, default=30, help="Number of days to look back")
+@click.option("--output", type=click.Path(), help="Output file path")
+@click.option("--generate-report", is_flag=True, help="Generate CSV report")
+@add_common_options
 @click.pass_context
+@backup_operation(requires_confirmation=False)
 def scan_backups(
-    ctx, landing_zones, region, output, snapshot_age_days, ami_age_days, test
+    ctx, days, output, generate_report, landing_zones, dry_run, verbose, force, managed_by
 ):
-    """Scan and report on AWS backups (snapshots and AMIs) based on age thresholds."""
-    # Handle test account configuration
-    if test:
-        config_manager = ctx.obj["config"]
-        test_account_id = config_manager.get_test_account_id()
-        test_account_name = config_manager.get_test_account_name()
-        landing_zones = [f"{test_account_name}:{test_account_id}"]
-    else:
-        landing_zones = list(landing_zones) if landing_zones else None
-
-    job = ManageBackups(ctx.obj["config"])
-    result = job.execute(
-        landing_zones=landing_zones,
-        region=region,
-        output=output,
-        snapshot_age_days=snapshot_age_days,
-        ami_age_days=ami_age_days,
-        delete_old_snapshots=False,
-        delete_old_amis=False,
-        create_amis=False,
-        dry_run=True,
-    )
-
-    # Exit with appropriate code
-    if not result.get("success", False):
-        click.echo(f"Error: {result.get('error', 'Unknown error occurred')}", err=True)
-        ctx.exit(1)
+    """Scan backup status"""
+    setup_logging(verbose)
+    # All processing logic is handled by the decorator
+    pass
 
 
 @cli.command()
-@click.option(
-    "--landing-zones", "-l", multiple=True, help="Specific landing zones to process"
-)
-@click.option(
-    "--region", "-r", default="ap-southeast-2", help="AWS region to operate in"
-)
-@click.option(
-    "--age-days",
-    type=int,
-    default=30,
-    help="Age threshold for snapshots in days (default: 30)",
-)
-@click.option(
-    "--dry-run", is_flag=True, help="Preview operations without executing them"
-)
-@click.option(
-    "--test",
-    is_flag=True,
-    help="Use test account configuration from settings.yaml (overrides --landing-zones)",
-)
+@click.option("--days", type=int, default=30, help="Retention period in days")
+@click.option("--output", type=click.Path(), help="Output file path")
+@add_common_options
 @click.pass_context
-def delete_old_snapshots(ctx, landing_zones, region, age_days, dry_run, test):
-    """Delete EBS snapshots older than specified age threshold."""
-    # Handle test account configuration
-    if test:
-        config_manager = ctx.obj["config"]
-        test_account_id = config_manager.get_test_account_id()
-        test_account_name = config_manager.get_test_account_name()
-        landing_zones = [f"{test_account_name}:{test_account_id}"]
-    else:
-        landing_zones = list(landing_zones) if landing_zones else None
-
-    job = ManageBackups(ctx.obj["config"])
-    result = job.execute(
-        landing_zones=landing_zones,
-        region=region,
-        snapshot_age_days=age_days,
-        ami_age_days=90,  # Not used for this operation
-        delete_old_snapshots=True,
-        delete_old_amis=False,
-        create_amis=False,
-        dry_run=dry_run,
-    )
-
-    # Exit with appropriate code
-    if not result.get("success", False):
-        click.echo(f"Error: {result.get('error', 'Unknown error occurred')}", err=True)
-        ctx.exit(1)
+@backup_operation(requires_confirmation=True)
+def cleanup_snapshots(ctx, days, output, landing_zones, dry_run, verbose, force, managed_by):
+    """Clean up old snapshots"""
+    setup_logging(verbose)
+    # All processing logic is handled by the decorator
+    pass
 
 
 @cli.command()
-@click.option(
-    "--landing-zones", "-l", multiple=True, help="Specific landing zones to process"
-)
-@click.option(
-    "--region", "-r", default="ap-southeast-2", help="AWS region to operate in"
-)
-@click.option(
-    "--age-days",
-    type=int,
-    default=90,
-    help="Age threshold for AMIs in days (default: 90)",
-)
-@click.option(
-    "--dry-run", is_flag=True, help="Preview operations without executing them"
-)
-@click.option(
-    "--test",
-    is_flag=True,
-    help="Use test account configuration from settings.yaml (overrides --landing-zones)",
-)
+@click.option("--server-name", required=True, help="Server name pattern to create AMI from")
+@click.option("--no-reboot", is_flag=True, default=True, help="Create AMI without rebooting (default: True)")
+@add_common_options
 @click.pass_context
-def delete_old_amis(ctx, landing_zones, region, age_days, dry_run, test):
-    """Delete AMIs older than specified age threshold."""
-    # Handle test account configuration
-    if test:
-        config_manager = ctx.obj["config"]
-        test_account_id = config_manager.get_test_account_id()
-        test_account_name = config_manager.get_test_account_name()
-        landing_zones = [f"{test_account_name}:{test_account_id}"]
-    else:
-        landing_zones = list(landing_zones) if landing_zones else None
-
-    job = ManageBackups(ctx.obj["config"])
-    result = job.execute(
-        landing_zones=landing_zones,
-        region=region,
-        snapshot_age_days=30,  # Not used for this operation
-        ami_age_days=age_days,
-        delete_old_snapshots=False,
-        delete_old_amis=True,
-        create_amis=False,
-        dry_run=dry_run,
-    )
-
-    # Exit with appropriate code
-    if not result.get("success", False):
-        click.echo(f"Error: {result.get('error', 'Unknown error occurred')}", err=True)
-        ctx.exit(1)
+@ami_operation(requires_confirmation=True)
+def create_ami(
+    ctx, server_name, no_reboot, landing_zones, dry_run, verbose, force, managed_by
+):
+    """Create AMI from EC2 servers
+    
+    Creates AMI from servers matching the name pattern.
+    Use --managed-by=all to operate on all servers regardless of management type.
+    """
+    setup_logging(verbose)
+    # All processing logic is handled by the decorator
+    pass
 
 
 @cli.command()
-@click.option(
-    "--landing-zones", "-l", multiple=True, help="Specific landing zones to process"
-)
-@click.option(
-    "--region", "-r", default="ap-southeast-2", help="AWS region to operate in"
-)
-@click.option(
-    "--dry-run", is_flag=True, help="Preview operations without executing them"
-)
-@click.option(
-    "--test",
-    is_flag=True,
-    help="Use test account configuration from settings.yaml (overrides --landing-zones)",
-)
+@click.option("--ami-id", required=True, help="AMI ID to update to")
+@click.option("--template-name", help="EC2 Launch template name")
+@add_common_options
 @click.pass_context
-def create_amis(ctx, landing_zones, region, dry_run, test):
-    """Create AMIs for EC2 instances tagged with managed_by=CMS."""
-    # Handle test account configuration
-    if test:
-        config_manager = ctx.obj["config"]
-        test_account_id = config_manager.get_test_account_id()
-        test_account_name = config_manager.get_test_account_name()
-        landing_zones = [f"{test_account_name}:{test_account_id}"]
-    else:
-        landing_zones = list(landing_zones) if landing_zones else None
+@ami_operation(requires_confirmation=True)
+def update_ami(
+    ctx, ami_id, template_name, landing_zones, dry_run, verbose, force, managed_by
+):
+    """Update AMI in CloudFormation templates"""
+    setup_logging(verbose)
+    # All processing logic is handled by the decorator
+    pass
 
-    job = ManageBackups(ctx.obj["config"])
-    result = job.execute(
-        landing_zones=landing_zones,
-        region=region,
-        snapshot_age_days=30,  # Not used for this operation
-        ami_age_days=90,  # Not used for this operation
-        delete_old_snapshots=False,
-        delete_old_amis=False,
-        create_amis=True,
-        dry_run=dry_run,
-    )
 
-    # Exit with appropriate code
-    if not result.get("success", False):
-        click.echo(f"Error: {result.get('error', 'Unknown error occurred')}", err=True)
-        ctx.exit(1)
+@cli.command()
+def version():
+    """Show version information"""
+    click.echo("AWS Ops - Simplified Version 1.0.0")
+    click.echo("Enterprise AWS operations toolkit")
 
 
 if __name__ == "__main__":

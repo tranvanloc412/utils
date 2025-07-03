@@ -1,137 +1,170 @@
-# Server Management Job Usage
+# Start Servers Usage
 
-The `start-servers` and `stop-servers` commands allow you to start or stop EC2 instances across AWS landing zones with flexible filtering options.
+The AWS Ops toolkit provides server management commands for starting and stopping EC2 instances.
 
 ## Basic Usage
 
 ### Starting Servers
 
 ```bash
-# Start a specific server by name
-aws-ops start-servers --server-name "my-server" --test --dry-run
+# Start servers by name pattern
+aws-ops start-servers --name "web-*" --landing-zones "prod:123456789"
 
-# Start all stopped servers in a landing zone
-aws-ops start-servers --start-all --test --dry-run
+# Dry run first (recommended)
+aws-ops start-servers --name "web-*" --landing-zones "prod:123456789" --dry-run
 
-# Start all stopped servers in a landing zone
-aws-ops start-servers --start-all --test --dry-run
-
-# Start servers in specific landing zones
-aws-ops start-servers --landing-zones "zone1:account1" --landing-zones "zone2:account2" --start-all
+# Force without confirmation (for automation)
+aws-ops start-servers --name "web-*" --landing-zones "prod:123456789" --force
 ```
 
 ### Stopping Servers
 
 ```bash
-# Stop a specific server by name
-aws-ops stop-servers --server-name "my-server" --test --dry-run
+# Stop servers by name pattern
+aws-ops stop-servers --name "web-*" --landing-zones "prod:123456789"
 
-# Stop all running servers in a landing zone
-aws-ops stop-servers --stop-all --test --dry-run
+# Dry run first (recommended)
+aws-ops stop-servers --name "web-*" --landing-zones "prod:123456789" --dry-run
 
-# Stop all running servers in a landing zone
-aws-ops stop-servers --stop-all --test --dry-run
-
-# Stop servers in specific landing zones
-aws-ops stop-servers --landing-zones "zone1:account1" --landing-zones "zone2:account2" --stop-all
+# Force without confirmation (for automation)
+aws-ops stop-servers --name "web-*" --landing-zones "prod:123456789" --force
 ```
 
 ## Command Options
 
-### start-servers Options
+### Common Options
 
-| Option                 | Description                                                    |
-| ---------------------- | -------------------------------------------------------------- |
-| `--environment TEXT`   | Environment to target                                          |
-| `--landing-zones TEXT` | Specific landing zones to process (can be used multiple times) |
-| `-r, --region TEXT`    | AWS region to operate in (default: ap-southeast-2)             |
-| `--server-name TEXT`   | Specific server name to start                                  |
-| `--start-all`          | Start all stopped servers in the landing zone(s)               |
+| Option | Description |
+|--------|-------------|
+| `--name TEXT` | Server name pattern (supports wildcards) |
+| `--landing-zones TEXT` | Landing zones in format `env:account_id` |
+| `--dry-run` | Preview changes without executing |
+| `--verbose` | Enable verbose output |
+| `--force` | Skip confirmation prompts |
 
-| `--dry-run` | Preview operations without executing them |
-| `--test` | Use test account configuration from settings.yaml (overrides --landing-zones) |
+### Landing Zone Format
 
-### stop-servers Options
-
-| Option                 | Description                                                    |
-| ---------------------- | -------------------------------------------------------------- |
-| `--environment TEXT`   | Environment to target                                          |
-| `--landing-zones TEXT` | Specific landing zones to process (can be used multiple times) |
-| `-r, --region TEXT`    | AWS region to operate in (default: ap-southeast-2)             |
-| `--server-name TEXT`   | Specific server name to stop                                   |
-| `--stop-all`           | Stop all running servers in the landing zone(s)                |
-
-| `--dry-run` | Preview operations without executing them |
-| `--test` | Use test account configuration from settings.yaml (overrides --landing-zones) |
-
-## Usage Examples
-
-### 1. Test Mode with Dry Run
+Specify landing zones using the format `environment:account_id`:
 
 ```bash
-# Preview what servers would be started in test environment
-aws-ops start-servers --test --start-all --dry-run
+# Single landing zone
+--landing-zones "prod:123456789"
 
-# Preview what servers would be stopped in test environment
-aws-ops stop-servers --test --stop-all --dry-run
-```
-
-### 2. Start/Stop Specific Server
-
-```bash
-# Start a specific server by name
-aws-ops start-servers --server-name "web-server-01" --test
-
-# Stop a specific server by name
-aws-ops stop-servers --server-name "web-server-01" --test
-```
-
-### 3. Start/Stop All Servers in Landing Zone
-
-```bash
-# Start all stopped servers in test environment
-aws-ops start-servers --start-all --test
-
-# Stop all running servers in test environment
-aws-ops stop-servers --stop-all --test
-```
-
-### 4. Production Usage
-
-```bash
-# Start all servers in specific landing zones
-aws-ops start-servers --landing-zones "prod-zone:123456789" --start-all
-
-# Stop all servers in specific landing zones
-aws-ops stop-servers --landing-zones "prod-zone:123456789" --stop-all
+# Multiple landing zones
+--landing-zones "prod:123456789,staging:987654321"
 ```
 
 ## Safety Features
 
-- **Dry Run Mode**: Use `--dry-run` to preview operations without executing them
-- **State-Aware Operations**:
-  - `start-servers` only targets instances in 'stopped' state
-  - `stop-servers` only targets instances in 'running' state
-- **Flexible Filtering**: Multiple filtering options to target specific servers
-- **Error Handling**: Comprehensive error reporting and logging
-- **Test Mode**: Safe testing with `--test` flag using settings.yaml configuration
-- **Backward Compatibility**: Existing scripts continue to work unchanged
+### Dry Run Mode
 
-## Output
+Always test with `--dry-run` first:
 
-Both commands provide detailed output including:
+```bash
+aws-ops start-servers --name "web-*" --landing-zones "prod:123456789" --dry-run
+```
 
-- Number of zones processed
-- Servers started/stopped successfully
-- Dry-run operations (when using --dry-run)
-- Error count and details
-- Operation summary with action-specific metrics
+### Confirmation Prompts
 
-## Notes
+By default, the tool will ask for confirmation before making changes:
 
-- The `--test` flag overrides `--landing-zones` and uses configuration from settings.yaml
-- Use `--dry-run` for safe testing before actual operations
-- `start-servers` only targets stopped EC2 instances
-- `stop-servers` only targets running EC2 instances
-- All operations are logged for audit purposes
-- Both commands use the same underlying job class for consistency
+```
+Start servers matching 'web-*'? [y/N]: y
+```
+
+### Force Mode
+
+For automation, use `--force` to skip confirmations:
+
+```bash
+aws-ops start-servers --name "web-*" --landing-zones "prod:123456789" --force
+```
+
+## Examples
+
+### Development Workflow
+
+```bash
+# 1. First, scan to see what servers exist
+aws-ops scan-servers --landing-zones "dev:123456789"
+
+# 2. Test the operation with dry-run
+aws-ops start-servers --name "app-*" --landing-zones "dev:123456789" --dry-run
+
+# 3. Execute the operation
+aws-ops start-servers --name "app-*" --landing-zones "dev:123456789"
+```
+
+### Production Workflow
+
+```bash
+# Always use dry-run first in production
+aws-ops stop-servers --name "batch-*" --landing-zones "prod:123456789" --dry-run
+
+# Execute with verbose logging
+aws-ops stop-servers --name "batch-*" --landing-zones "prod:123456789" --verbose
+```
+
+### Automation Scripts
+
+```bash
+#!/bin/bash
+# Automated server management script
+
+set -e
+
+# Stop batch servers for maintenance
+aws-ops stop-servers \
+  --name "batch-*" \
+  --landing-zones "prod:123456789" \
+  --force \
+  --verbose
+
+# Perform maintenance here...
+sleep 300
+
+# Start batch servers
+aws-ops start-servers \
+  --name "batch-*" \
+  --landing-zones "prod:123456789" \
+  --force \
+  --verbose
+```
+
+## Error Handling
+
+### Common Errors
+
+1. **Invalid server name pattern**
+   ```
+   Error: Invalid server name pattern
+   ```
+   - Check that the name pattern is valid
+   - Ensure it's not empty and within length limits
+
+2. **Permission denied**
+   ```
+   Error starting servers: Access denied
+   ```
+   - Verify AWS credentials are configured
+   - Check IAM permissions for EC2 operations
+
+3. **Invalid landing zone format**
+   ```
+   Error: Invalid landing zone format
+   ```
+   - Use format `environment:account_id`
+   - Separate multiple zones with commas
+
+### Troubleshooting
+
+```bash
+# Enable verbose logging for debugging
+aws-ops start-servers --name "web-*" --landing-zones "prod:123456789" --verbose
+
+# Check AWS credentials
+aws sts get-caller-identity
+
+# Verify configuration
+python -c "from aws_ops.utils.config import ConfigManager; print(ConfigManager().config)"
+```

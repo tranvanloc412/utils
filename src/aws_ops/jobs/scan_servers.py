@@ -1,263 +1,247 @@
 #!/usr/bin/env python3
-"""Scan EC2 Servers
 
-Scans EC2 servers across AWS landing zones with flexible filtering options
-and generates CSV reports.
-"""
-
+import os
+import time
+import logging
+from datetime import datetime
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
-from pathlib import Path
+from boto3 import Session
 
-from aws_ops.core.processors.zone_processor import ZoneProcessor
-from aws_ops.core.processors.report_generator import CSVReportGenerator, ReportConfig
-from aws_ops.utils.logger import setup_logger
 from aws_ops.core.aws.ec2 import create_ec2_manager
-from aws_ops.core.models.server import create_server_info
+from aws_ops.core.models.server import ServerInfo
+from aws_ops.core.constants import CMS_MANAGED, MANAGED_BY_KEY
+from aws_ops.core.processors.report_generator import CSVReportGenerator
 from aws_ops.jobs.base import BaseJob
-
-logger = setup_logger(__name__, "scan_servers.log")
+from aws_ops.utils.lz import extract_environment_from_zone
+from aws_ops.utils.config import ConfigManager
 
 
 @dataclass
-class ScanParameters:
-    """Parameters for EC2 server scanning."""
+class ScanMetrics:
+    """Simple metrics for scan operation tracking."""
 
-    region: str = "ap-southeast-2"
-    platform: Optional[str] = None
-    env_filter: Optional[str] = None
-    scan_all: bool = False
-    output: Optional[str] = None
-    lz_env: Optional[str] = None
-
-    def get_scan_type(self) -> str:
-        """Determine scan type for reporting."""
-        if self.platform:
-            return self.platform
-        elif self.env_filter:
-            return f"env_{self.env_filter}"
-        return "all"
-
-    def get_filter_description(self) -> str:
-        """Get human-readable filter description."""
-        filters = []
-        if self.platform:
-            filters.append(f"Platform: {self.platform}")
-        if self.env_filter:
-            filters.append(f"Environment: {self.env_filter}")
-        if self.lz_env:
-            filters.append(f"Landing Zone Env: {self.lz_env}")
-        if self.scan_all:
-            filters.append("Scan all instances")
-        return ", ".join(filters) if filters else "No filters"
-
-
-def _build_ec2_filters(params: ScanParameters) -> List[Dict[str, Any]]:
-    """Build EC2 API filters based on parameters."""
-    if params.scan_all:
-        return []  # No pre-filtering when scanning all
-
-    filters = []
-    if params.platform and params.platform.lower() in ["windows", "linux"]:
-        filters.append({"Name": "platform", "Values": [params.platform.lower()]})
-    if params.env_filter:
-        filters.append({"Name": "tag:Environment", "Values": [params.env_filter]})
-    return filters
-
-
-def _should_include_server(server_dict: Dict[str, Any], params: ScanParameters) -> bool:
-    """Determine if server should be included in results."""
-    if not params.scan_all or not params.env_filter:
-        return True
-    return server_dict.get("Environment", "").lower() == params.env_filter.lower()
+    total_instances: int = 0
+    processed_instances: int = 0
+    scan_duration: float = 0.0
 
 
 def scan_ec2_servers(
-    session, zone_name: str, account_id: str, **kwargs
+    session: Session,
+    zone_info: Dict[str, Any],
+    managed_by: Optional[str] = None,
+    logger: Optional[logging.Logger] = None,
+    correlation_id: str = None,
 ) -> List[Dict[str, Any]]:
-    """Scan for EC2 servers with flexible filtering options.
+    """Scan EC2 servers in a zone with basic tag filtering.
 
     Args:
         session: AWS session
-        zone_name: Landing zone name
-        account_id: AWS account ID
-        **kwargs: Additional parameters including scan_params
-
+        zone_info: Zone information
+        managed_by: Filter by managed_by tag (e.g., 'CMS') or None for all
+        logger: Logger instance
+        correlation_id: Correlation ID for tracking
+        
     Returns:
-        List of server dictionaries
+        List of filtered servers
     """
-    # Extract parameters from kwargs
-    params = ScanParameters(
-        region=kwargs.get("region", "ap-southeast-2"),
-        platform=kwargs.get("platform"),
-        env_filter=kwargs.get("env_filter"),
-        scan_all=kwargs.get("scan_all", False),
-    )
+    scan_start = time.time()
+    metrics = ScanMetrics()
 
     try:
-        ec2_manager = create_ec2_manager(session, params.region)
-        filters = _build_ec2_filters(params)
+        if logger:
+            logger.info( 
+                f"[{correlation_id or 'N/A'}] Starting EC2 server scan for zone: {zone_info.get('name', 'unknown')}"
+            )
 
-        # Get instances with filters
-        instances = ec2_manager.describe_instances(filters=filters if filters else None)
+        # Apply managed_by filtering - default to CMS unless 'all' is specified
+        filters = []
+        if managed_by and managed_by.lower() != "all":
+            filters.append({
+                "Name": f"tag:{MANAGED_BY_KEY}",
+                "Values": [managed_by]
+            })
+        elif not managed_by or managed_by == CMS_MANAGED:
+            # Default to CMS filtering when not specified or explicitly CMS
+            filters.append({
+                "Name": f"tag:{MANAGED_BY_KEY}",
+                "Values": [CMS_MANAGED]
+            })
+            
+        ec2_manager = create_ec2_manager(session)
+        instances = ec2_manager.describe_instances(filters=filters) if filters else ec2_manager.describe_instances()
+        metrics.total_instances = len(instances)
 
         servers = []
+
+        # Process instances with basic information collection
         for instance in instances:
-            server = create_server_info(instance)
-            server_dict = server.to_dict()
-            server_dict["LandingZone"] = zone_name
+            server = ServerInfo.from_aws_instance(instance)
 
-            # Extract environment from landing zone name
-            lz_env = "N/A"
-            zone_name_lower = zone_name.lower()
-            for env_suffix in ["nonprod", "preprod", "prod"]:
-                if zone_name_lower.endswith(env_suffix):
-                    lz_env = env_suffix
-                    break
-            server_dict["Environment"] = lz_env
+            # Get managed_by tag value
+            managed_by_tag = server.get_tag(MANAGED_BY_KEY, "")
+            managed_by_value = managed_by_tag if managed_by_tag else "SS"
 
-            # Apply post-filtering if needed
-            if _should_include_server(server_dict, params):
-                servers.append(server_dict)
+            # Basic server information
+            server_dict = {
+                "instance_id": server.instance_id,
+                "instance_name": server.get_tag("Name"),
+                "instance_type": server.instance_type,
+                "state": server.state,
+                "platform": server.platform,
+                "zone": zone_info.get("name", "unknown"),
+                "environment_tag": server.get_tag("Environment", ""),
+                "managed_by": managed_by_value,
+            }
 
-        logger.info(
-            f"Found {len(servers)} servers in {zone_name} with filters: {params.get_filter_description().lower()}"
-        )
+            servers.append(server_dict)
+            metrics.processed_instances += 1
+
+        # Calculate basic metrics
+        metrics.scan_duration = time.time() - scan_start
+
+        if logger:
+            logger.info(
+                f"[{correlation_id or 'N/A'}] Found {len(servers)} servers in zone {zone_info.get('name', 'unknown')} "
+                f"(scan took {round(metrics.scan_duration, 2)}s)"
+            )
+
         return servers
 
     except Exception as e:
-        logger.error(f"Error scanning EC2 servers in {zone_name}: {e}")
+        if logger:
+            logger.error(f"[{correlation_id or 'N/A'}] Error scanning servers: {e}")
+        else:
+            print(f"Error scanning servers: {e}")
         return []
 
 
-def write_csv_report(
-    servers: List[Dict[str, Any]], filename: str = None, scan_type: str = "all"
-):
-    """Write server information to CSV file using CSVReportGenerator.
-
-    Args:
-        servers: List of server dictionaries
-        filename: Output filename (auto-generated if None)
-        scan_type: Type of scan for filename generation
-    """
-    if not servers:
-        print("No servers to write to CSV")
-        return
-
-    # Configure report generator
-    config = ReportConfig(
-        output_dir="reports",
-        preferred_fields=[
-            "LandingZone",
-            "Environment",
-            "instance_name",
-            "instance_id",
-            "instance_type",
-            "state",
-            "platform",
-        ],
-    )
-
-    generator = CSVReportGenerator(config)
-
-    # Generate report
-    result = generator.generate_report(
-        data=servers, filename=filename, scan_type=f"{scan_type}_servers"
-    )
-
-    # The generator already returns the full path in the result
-    output_file = result.get("filename", "report.csv")
-    output_path = Path(config.output_dir) / output_file
-
-    print(f"EC2 servers report written to {output_path}")
-    print(f"Total servers found: {len(servers)}")
-
-
 class ScanServers(BaseJob):
-    """Job for scanning EC2 servers across AWS landing zones."""
+    """Simple job for scanning EC2 servers.
 
-    def execute(
-        self,
-        environment: Optional[str] = None,
-        landing_zones: Optional[List[str]] = None,
-        region: str = "ap-southeast-2",
-        output: Optional[str] = None,
-        platform: Optional[str] = None,
-        env_filter: Optional[str] = None,
-        scan_all: bool = False,
-        lz_env: Optional[str] = None,
-        **kwargs,
-    ) -> Dict[str, Any]:
-        """Execute the server scanning job.
+    Features:
+    - Basic instance metadata collection
+    - Simple tag-based filtering
+    - CSV report generation
+    """
 
-        Args:
-            environment: Environment to scan
-            landing_zones: Specific landing zones to scan
-            region: AWS region to scan
-            output: Output CSV file path
-            platform: Platform filter (windows or linux)
-            env_filter: Environment tag filter
-            scan_all: Scan all instances regardless of platform
-            lz_env: Landing zone environment filter (nonprod, preprod, prod)
-            **kwargs: Additional parameters
-
-        Returns:
-            Dictionary with execution results
-        """
-        params = ScanParameters(
-            region=region,
-            platform=platform,
-            env_filter=env_filter,
-            scan_all=scan_all,
-            output=output,
-            lz_env=lz_env,
+    def __init__(self, config_manager: ConfigManager = None):
+        super().__init__(
+            config_manager=config_manager,
+            job_name="scan_servers",
+            default_role="provision",
         )
+        self.report_generator = None
 
-        processor = ZoneProcessor(
-            script_name="scan_ec2_servers",
-            description="Scan EC2 servers across AWS landing zones with flexible filtering",
-        )
+    def _generate_report(
+        self, servers: List[Dict[str, Any]], zone_info: Dict[str, Any]
+    ) -> str:
+        """Generate a CSV report of servers"""
+        # Initialize report generator if not already done
+        if not self.report_generator:
+            report_path = self.config_manager.get_report_path()
+            self.report_generator = CSVReportGenerator(output_dir=report_path)
 
-        try:
-            all_servers, summary = processor.process_zones_with_aggregation(
-                process_function=scan_ec2_servers,
-                landing_zones=landing_zones,
-                environment=environment,
-                session_purpose="ec2-server-scan",
-                region=params.region,
-                platform=params.platform,
-                env_filter=params.env_filter,
-                scan_all=params.scan_all,
-            )
+        # Prepare data for report - add timestamp and additional fields
+        report_data = []
+        scan_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-            # Write CSV report if servers found
-            if all_servers:
-                write_csv_report(all_servers, params.output, params.get_scan_type())
+        for server in servers:
+            # Extract environment from landing zone name
+            landing_zone = server.get("zone", "")
+            try:
+                lz_environment = extract_environment_from_zone(landing_zone)
+            except Exception:
+                # Fallback to original environment if extraction fails
+                lz_environment = zone_info.get("environment", "")
 
-            # Print summary
-            processor.print_summary(
-                summary,
-                {
-                    "Output file": params.output if all_servers else "None (no data)",
-                    "Region": params.region,
-                    "Filters applied": params.get_filter_description(),
-                    "Total servers found": len(all_servers) if all_servers else 0,
-                },
-            )
+            # Get Environment tag or fallback to LzEnvironment
+            environment = server.get("environment_tag", "") or lz_environment
 
-            return {
-                "success": True,
-                "servers_found": len(all_servers) if all_servers else 0,
-                "output_file": params.output if all_servers else None,
-                "filters_applied": params.get_filter_description(),
-                "summary": summary,
+            # Basic report item
+            report_item = {
+                "LandingZone": landing_zone,
+                "Account": zone_info.get("account_id", ""),
+                "LZEnvironment": lz_environment,
+                "Environment": environment,
+                "InstanceId": server.get("instance_id", ""),
+                "InstanceName": server.get("instance_name", ""),
+                "InstanceType": server.get("instance_type", ""),
+                "Platform": server.get("platform", ""),
+                "ScanTime": scan_time,
+                "State": server.get("state", ""),
+                "managed_by": server.get("managed_by", ""),
             }
+            report_data.append(report_item)
 
-        except Exception as e:
-            logger.error(f"Error executing scan server job: {e}")
+        # Generate the report
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        zone_name = zone_info.get("name", "unknown").replace(" ", "_").lower()
+        filename = f"servers_{zone_name}_{timestamp}.csv"
+
+        # Define column order
+        column_order = [
+            "LandingZone",
+            "Account",
+            "LZEnvironment",
+            "InstanceId",
+            "InstanceName",
+            "InstanceType",
+            "Environment",
+            "Platform",
+            "ScanTime",
+            "State",
+            "managed_by",
+        ]
+
+        success = self.report_generator.generate_report(
+            report_data, filename, column_order
+        )
+        if success:
+            report_file = os.path.join(self.config_manager.get_report_path(), filename)
+            self.logger.info(
+                f"[{self.correlation_id}] Generated server report: {report_file}"
+            )
+            return report_file
+        else:
+            self.logger.warning(
+                f"[{self.correlation_id}] Failed to generate server report"
+            )
+            return None
+
+    def execute(self, zone_info: Dict[str, Any], **kwargs) -> Dict[str, Any]:
+        """Execute the server scanning job."""
+        try:
+            # Get parameters
+            generate_report = kwargs.get("generate_report", True)
+            managed_by = kwargs.get("managed_by")
+
+            # Create AWS session
+            session = self.create_aws_session(zone_info, role_type=self.default_role)
+
+            # Scan servers
+            servers = scan_ec2_servers(
+                session, zone_info, managed_by, self.logger, self.correlation_id
+            )
+
+            # Generate report if requested
+            report_path = None
+            if generate_report and servers:
+                report_path = self._generate_report(servers, zone_info)
+
             return {
-                "success": False,
+                "status": "success",
+                "servers_found": len(servers),
+                "servers": servers,
+                "report_path": report_path,
+            }
+        except Exception as e:
+            self.logger.error(
+                f"[{self.correlation_id}] Error executing scan server job: {e}"
+            )
+            return {
+                "status": "error",
                 "error": str(e),
                 "servers_found": 0,
-                "output_file": None,
+                "correlation_id": self.correlation_id,
             }

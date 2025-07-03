@@ -1,34 +1,9 @@
 #!/usr/bin/env python3
-"""
-Zone Processor Utility
+"""Enterprise Zone Processor for AWS operations with advanced decorator support."""
 
-Provides a reusable framework for processing AWS landing zones with common patterns:
-- Zone filtering and iteration
-- Session management and error handling
-- Progress tracking and logging
-
-Usage:
-    from aws_ops.core.processors.zone_processor import ZoneProcessor
-
-    def process_zone(session, zone_name, account_id, **kwargs):
-        # Your zone-specific logic here
-        return results
-
-    processor = ZoneProcessor("my_script", "My AWS script")
-    results = processor.process_zones(
-        process_function=process_zone,
-        landing_zones=args.landing_zones,
-        environment=args.environment
-    )
-"""
-
-import argparse
-from typing import Callable, Dict, List, Optional, Any, Tuple
-from dataclasses import dataclass
-
-from aws_ops.utils.lz import fetch_zones_from_url, filter_zones
-from aws_ops.utils.session import SessionManager
-from aws_ops.utils.config import get_zones_url, get_aws_region, get_provision_role
+import time
+from typing import Callable, Dict, List, Any, Optional
+from dataclasses import dataclass, field
 from aws_ops.utils.logger import setup_logger
 
 
@@ -40,278 +15,208 @@ class ProcessingResult:
     processed_zones: int
     total_zones: int
     errors: List[str]
+    execution_time: float = 0.0
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    success_rate: float = field(init=False)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    failed_zones: List[str] = field(default_factory=list)
 
-    @property
-    def success_rate(self) -> float:
-        """Calculate success rate as percentage."""
-        return (
-            (self.processed_zones / self.total_zones * 100)
-            if self.total_zones > 0
-            else 0
-        )
+    def __post_init__(self):
+        """Calculate success rate after initialization."""
+        if self.total_zones > 0:
+            self.success_rate = (self.processed_zones / self.total_zones) * 100
+        else:
+            self.success_rate = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for backward compatibility."""
+        """Convert result to dictionary for serialization."""
         return {
-            "results": self.results,
             "processed_zones": self.processed_zones,
             "total_zones": self.total_zones,
+            "success_rate": f"{self.success_rate:.2f}%",
+            "execution_time": f"{self.execution_time:.2f}s",
+            "start_time": self.start_time,
+            "end_time": self.end_time,
+            "errors_count": len(self.errors),
             "errors": self.errors,
+            "failed_zones": self.failed_zones,
+            "metadata": self.metadata,
         }
 
 
 class ZoneProcessor:
-    """Utility class for processing AWS landing zones with common patterns."""
+    """Enterprise zone processor for AWS operations with advanced features."""
 
-    def __init__(
-        self, script_name: str, description: str, log_file: Optional[str] = None
-    ):
+    def __init__(self, name: str = "zone_processor", parallel: bool = False):
         """Initialize the zone processor.
 
         Args:
-            script_name: Name of the script (used for logging context)
-            description: Description for argument parser
-            log_file: Optional log file name (defaults to {script_name}.log)
+            name: Name of the processor instance
+            parallel: Whether to enable parallel processing (future enhancement)
         """
-        self.script_name = script_name
-        self.description = description
-        self.logger = setup_logger(script_name, log_file or f"{script_name}.log")
-
-        # Initialize AWS components
-        self.zones_url = get_zones_url()
-        self.region = get_aws_region()
-        self.role = get_provision_role()
-        self.session_manager = SessionManager()
-
-    def get_zones_to_process(
-        self, landing_zones: List[str], environment: str
-    ) -> List[str]:
-        """Get the list of zones to process based on criteria.
-
-        Args:
-            landing_zones: List of specific landing zone names or "name:account_id" format
-            environment: Environment filter (prod/nonprod)
-
-        Returns:
-            List of zone lines in format "<account_id> <zone_name>"
-        """
-        if not landing_zones:
-            zones = fetch_zones_from_url(self.zones_url)
-            return filter_zones(zones, environment=environment)
-
-        # Handle different landing zone formats
-        zones = []
-        traditional_zones = []
-
-        for lz in landing_zones:
-            if ":" in lz:
-                # Format: "name:account_id" -> "account_id name"
-                name, account_id = lz.split(":", 1)
-                zones.append(f"{account_id} {name}")
-            else:
-                traditional_zones.append(lz)
-
-        # Fetch and filter traditional zones if any
-        if traditional_zones:
-            all_zones = fetch_zones_from_url(self.zones_url)
-            zones.extend(
-                [
-                    zone_line
-                    for zone_line in all_zones
-                    if zone_line.split()[1] in traditional_zones
-                ]
-            )
-
-        return zones
-
-    def _process_single_zone(
-        self, zone_line: str, process_function: Callable, session_purpose: str, **kwargs
-    ) -> Tuple[Any, Optional[str]]:
-        """Process a single zone and return result or error.
-
-        Returns:
-            Tuple of (result, error_message). One will be None.
-        """
-        account_id, zone_name = zone_line.split()
-
-        try:
-            session = self.session_manager.get_session(
-                account_id, zone_name, self.role, self.region, session_purpose
-            )
-
-            result = process_function(
-                session=session, zone_name=zone_name, account_id=account_id, **kwargs
-            )
-
-            self.logger.debug(f"Successfully processed zone {zone_name}")
-            return result, None
-
-        except Exception as e:
-            error_msg = f"Error processing {zone_name}: {e}"
-            self.logger.error(error_msg)
-            return None, error_msg
+        self.name = name
+        self.parallel = parallel
+        self.logger = setup_logger(__name__, "zone_processor.log")
+        self._metrics = {"total_operations": 0, "total_errors": 0}
 
     def process_zones(
         self,
+        zones: List[str],
         process_function: Callable,
-        landing_zones: List[str],
-        environment: str,
-        session_purpose: str = "zone-processing",
+        operation_name: str = "unknown",
+        correlation_id: Optional[str] = None,
         **kwargs,
     ) -> ProcessingResult:
-        """Process zones using the provided function.
+        """Process a list of zones with the given function.
 
         Args:
-            process_function: Function to call for each zone.
-                             Signature: func(session, zone_name, account_id, **kwargs) -> Any
-            landing_zones: List of specific landing zone names
-            environment: Environment filter (prod/nonprod)
-            session_purpose: Purpose string for session management
+            zones: List of zone identifiers to process
+            process_function: Function to execute for each zone
+            operation_name: Name of the operation for logging/metrics
+            correlation_id: Correlation ID for tracking operations across logs
             **kwargs: Additional arguments passed to process_function
-
-        Returns:
-            ProcessingResult with results and summary information
         """
-        zones = self.get_zones_to_process(landing_zones, environment)
+        start_time = time.time()
+        start_timestamp = time.strftime(
+            "%Y-%m-%d %H:%M:%S UTC", time.gmtime(start_time)
+        )
 
-        if not zones:
-            self.logger.warning("No zones found matching criteria")
-            return ProcessingResult([], 0, 0, ["No zones found matching criteria"])
-
-        self.logger.info(f"Processing {len(zones)} zones")
+        correlation_prefix = f"[{correlation_id}] " if correlation_id else ""
+        self.logger.info(
+            f"{correlation_prefix}Starting {operation_name} operation on {len(zones)} zones"
+        )
 
         results = []
         errors = []
-        processed_count = 0
+        processed = 0
+        failed_zones = []
 
-        for zone_line in zones:
-            result, error = self._process_single_zone(
-                zone_line, process_function, session_purpose, **kwargs
+        for i, zone in enumerate(zones, 1):
+            try:
+                self.logger.debug(
+                    f"{correlation_prefix}Processing zone {i}/{len(zones)}: {zone}"
+                )
+                result = process_function(zone, **kwargs)
+
+                # Validate if processing was actually successful
+                if self._validate_processing_result(result, zone):
+                    results.append(result)
+                    processed += 1
+                    self.logger.info(
+                        f"{correlation_prefix}Successfully processed zone: {zone}"
+                    )
+                else:
+                    error_msg = f"{correlation_prefix}Zone processing returned unsuccessful result for {zone}"
+                    errors.append(error_msg)
+                    failed_zones.append(zone)
+                    self.logger.warning(error_msg)
+                    self._metrics["total_errors"] += 1
+
+            except Exception as e:
+                error_msg = (
+                    f"{correlation_prefix}Error processing zone {zone}: {str(e)}"
+                )
+                errors.append(error_msg)
+                failed_zones.append(zone)
+                self.logger.error(error_msg, exc_info=True)
+                self._metrics["total_errors"] += 1
+
+        end_time = time.time()
+        end_timestamp = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(end_time))
+        execution_time = end_time - start_time
+
+        self._metrics["total_operations"] += 1
+
+        result = ProcessingResult(
+            results=results,
+            processed_zones=processed,
+            total_zones=len(zones),
+            errors=errors,
+            execution_time=execution_time,
+            start_time=start_timestamp,
+            end_time=end_timestamp,
+            failed_zones=failed_zones,
+            metadata={
+                "operation_name": operation_name,
+                "processor_name": self.name,
+                "parallel_enabled": self.parallel,
+                "all_zones": zones,
+            },
+        )
+
+        # Log detailed summary with successful and failed zones
+        successful_zones = [zone for zone in zones if zone not in failed_zones]
+        
+        self.logger.info(
+            f"{correlation_prefix}Completed {operation_name}: {processed}/{len(zones)} zones processed "
+            f"({result.success_rate:.1f}% success rate) in {execution_time:.2f}s"
+        )
+        
+        if successful_zones:
+            successful_zone_names = [self._get_zone_name(zone) for zone in successful_zones]
+            self.logger.info(
+                f"{correlation_prefix}Successful zones ({len(successful_zones)}): {', '.join(successful_zone_names)}"
+            )
+        
+        if failed_zones:
+            failed_zone_names = [self._get_zone_name(zone) for zone in failed_zones]
+            self.logger.info(
+                f"{correlation_prefix}Failed zones ({len(failed_zones)}): {', '.join(failed_zone_names)}"
             )
 
-            if error:
-                errors.append(error)
-            elif result is not None:
-                results.append(result)
-                processed_count += 1
-            else:
-                processed_count += 1  # Successful but no result returned
+        return result
 
-        self.logger.info(f"Completed: {processed_count}/{len(zones)} zones processed")
-
-        return ProcessingResult(results, processed_count, len(zones), errors)
-
-    def process_zones_with_aggregation(
-        self,
-        process_function: Callable,
-        landing_zones: List[str],
-        environment: str,
-        session_purpose: str = "zone-processing",
-        **kwargs,
-    ) -> Tuple[List[Any], Dict[str, Any]]:
-        """Process zones and aggregate results into a flat list.
-
-        This is useful when each zone returns a list of items that should be combined.
+    def _validate_processing_result(self, result: Any, zone: str) -> bool:
+        """Validate if zone processing was actually successful.
 
         Args:
-            process_function: Function to call for each zone (should return a list)
-            landing_zones: List of specific landing zone names
-            environment: Environment filter (prod/nonprod)
-            session_purpose: Purpose string for session management
-            **kwargs: Additional arguments passed to process_function
+            result: The result returned by the process function
+            zone: The zone identifier for logging
 
         Returns:
-            Tuple of (aggregated_results, summary_info)
+            bool: True if processing was successful, False otherwise
         """
-        result = self.process_zones(
-            process_function, landing_zones, environment, session_purpose, **kwargs
-        )
+        if result is None:
+            return False
 
-        # Flatten results if they are lists
-        aggregated_results = []
-        for item in result.results:
-            if isinstance(item, list):
-                aggregated_results.extend(item)
-            else:
-                aggregated_results.append(item)
+        # For dictionary results (common pattern), check status field
+        if isinstance(result, dict):
+            status = result.get("status", "").lower()
+            if status == "error" or status == "failed":
+                return False
+            # Consider success if status is explicitly 'success' or if no status but has meaningful data
+            if status == "success":
+                return True
+            # If no explicit status, check for meaningful data indicators
+            return bool(
+                result.get("servers", []) or result.get("data", []) or len(result) > 1
+            )
 
-        summary = {
-            "processed_zones": result.processed_zones,
-            "total_zones": result.total_zones,
-            "total_items": len(aggregated_results),
-            "errors": result.errors,
-        }
+        # For list results, consider successful if not empty
+        if isinstance(result, list):
+            return len(result) > 0
 
-        return aggregated_results, summary
+        # For other types, consider truthy values as successful
+        return bool(result)
 
-    def add_common_arguments(
-        self, parser: argparse.ArgumentParser
-    ) -> argparse.ArgumentParser:
-        """Add common landing zone and environment arguments to parser."""
-        parser.add_argument(
-            "--landing-zones",
-            "-l",
-            nargs="*",
-            default=[],
-            help="Landing zone names (e.g., cmsnonprod appnonprod). Leave blank for all zones in the environment.",
-        )
-        parser.add_argument(
-            "--environment",
-            "-e",
-            default="nonprod",
-            choices=["prod", "nonprod"],
-            help="Environment suffix to filter zones if landing-zones not specified.",
-        )
-        return parser
+    def get_metrics(self) -> Dict[str, Any]:
+        """Get processor metrics for monitoring."""
+        return self._metrics.copy()
 
-    def create_standard_parser(
-        self, additional_args: Optional[Callable] = None
-    ) -> argparse.ArgumentParser:
-        """Create a standard argument parser with common arguments.
+    def reset_metrics(self) -> None:
+        """Reset processor metrics."""
+        self._metrics = {"total_operations": 0, "total_errors": 0}
 
+    def _get_zone_name(self, zone) -> str:
+        """Extract zone name for display purposes.
+        
         Args:
-            additional_args: Optional function to add script-specific arguments.
-                           Signature: func(parser) -> parser
-
+            zone: Zone identifier (string or dict)
+            
         Returns:
-            Configured ArgumentParser
+            str: Zone name for display
         """
-        parser = argparse.ArgumentParser(description=self.description)
-        parser = self.add_common_arguments(parser)
-
-        if additional_args:
-            parser = additional_args(parser)
-
-        return parser
-
-    def print_summary(
-        self, summary: Dict[str, Any], additional_info: Optional[Dict[str, Any]] = None
-    ):
-        """Print a standardized summary of processing results.
-
-        Args:
-            summary: Summary dictionary from process_zones methods
-            additional_info: Optional additional information to display
-        """
-        print("\nSummary:")
-        print(
-            f"  Zones processed: {summary['processed_zones']}/{summary['total_zones']}"
-        )
-
-        if "total_items" in summary:
-            print(f"  Total items found: {summary['total_items']}")
-
-        if additional_info:
-            for key, value in additional_info.items():
-                print(f"  {key}: {value}")
-
-        if summary["errors"]:
-            error_count = len(summary["errors"])
-            print(f"  Errors: {error_count}")
-
-            # Show first 3 errors
-            for error in summary["errors"][:3]:
-                print(f"    - {error}")
-
-            if error_count > 3:
-                print(f"    ... and {error_count - 3} more errors")
+        if isinstance(zone, dict):
+            return zone.get('name', zone.get('account_id', str(zone)))
+        return str(zone)
