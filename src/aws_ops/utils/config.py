@@ -9,9 +9,8 @@ Provides centralized configuration loading.
 import os
 import yaml
 from pathlib import Path
-from typing import Dict, Any, Optional, List
-
-from .logger import setup_logger
+from typing import Dict, Any, List, Optional
+from aws_ops.utils.logger import setup_logger
 
 logger = setup_logger(__name__, "config.log")
 
@@ -165,9 +164,23 @@ class ConfigManager:
         """Get account mapping configuration."""
         return self.get_value("account_mapping", {})
 
-    def get_zones(self) -> List[Dict[str, str]]:
-        """Get zones from account_mapping first, then fall back to zones_url."""
-        # Priority 1: Try to get zones from account_mapping in settings.yml
+    def get_zones(self, zone_names: Optional[List[str]] = None) -> List[Dict[str, str]]:
+        """Get zones with individual fallback logic.
+        
+        Args:
+            zone_names: Optional list of specific zone names to resolve.
+                       If None, returns all zones from account_mapping or zones_url.
+        
+        Returns:
+            List of zone dictionaries with fallback resolution
+        """
+        # If specific zones requested, use individual fallback logic
+        if zone_names:
+            from aws_ops.core.processors.zone_processor import ZoneProcessor
+            processor = ZoneProcessor(name="config_zone_resolver")
+            return processor.resolve_zones(zone_names)
+        
+        # Legacy behavior: get all zones from account_mapping first, then fall back to zones_url
         account_mapping = self.get_account_mapping()
         
         if account_mapping:
@@ -175,9 +188,10 @@ class ConfigManager:
             zones = []
             for zone_name, account_id in account_mapping.items():
                 zones.append({
-                    'account_id': account_id,
+                    'account_id': str(account_id),  # Ensure account_id is always a string
                     'name': zone_name,
-                    'environment': zone_name  # Use zone_name as environment for now
+                    'environment': zone_name,
+                    'source': 'local_config'
                 })
             return zones
         
@@ -201,7 +215,8 @@ class ConfigManager:
                     zones.append({
                         'account_id': account_id,
                         'name': zone_name,
-                        'environment': zone_name  # Use zone_name as environment for now
+                        'environment': zone_name,
+                        'source': 'external_url'
                     })
             logger.info(f"Fetched zones from external URL: {len(zones)} zones")
             return zones

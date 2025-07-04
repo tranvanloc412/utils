@@ -9,12 +9,13 @@ import re
 
 class CLIError(Exception):
     """Custom exception for CLI-related errors."""
+
     pass
 
 
 class ValidationRules:
     """Validation utilities for AWS resources."""
-    
+
     @staticmethod
     def validate_aws_account_id(account_id: str) -> bool:
         """Validate AWS account ID format (12 digits)."""

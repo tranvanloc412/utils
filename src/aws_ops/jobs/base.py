@@ -70,7 +70,7 @@ class BaseJob(ABC):
         roles_config = aws_config.get('roles', {})
         role_name = roles_config.get(role_type)
         
-        account_id = zone_info.get('account_id')
+        account_id = str(zone_info.get('account_id'))  # Ensure account_id is always a string
         account_name = zone_info.get('name', account_id)
         region = aws_config.get('region', 'ap-southeast-2')
         

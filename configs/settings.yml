@@ -2,33 +2,37 @@
 aws:
   region: "ap-southeast-2"
   roles:
-    viewer: ""
-    provision: ""
+    viewer: "HIPCMSViewerSpokeRole"
+    provision: "HIPCMSProvisionSpokeRole"
 
 # External Services
 services:
-  zones_url: ""
+  zones_url: "https://hip.ext.national.com.au/accounts/cms"
 
 # Account Mapping (zone_name -> account_id)
 account_mapping:
-  lz213:2313
+  cmsnonprod: "954976297051"
+  lz249nonprod: "954976297051"
+  lz250nonprod: "954976297052"
+  cmspreprod: "954976297052"
+  cmsprod: "987654321098"
 
 # AMI Sources
 ami_sources:
-  rhel9_ami: ""
-  rhel8_ami: ""
+  rhel9_ami: "https://hip.ext.national.com.au/images/aws/rhel/9/latest-job1"
+  rhel8_ami: "https://hip.ext.national.com.au/images/aws/rhel/8/latest-job1"
 
 # Auto Scaling Groups
 asg_stateless:
   cmsnonprod: # landing zone
-    - asg_name: ""
-      launch_template: ""
-      ami: ""
-      kms_key: ""
-    - asg_name: ""
-      launch_template: ""
-      ami: ""
-      kms_key: ""
+    - asg_name: "xva-dev-asg"
+      launch_template: "xva-dev-lt"
+      ami: "rhel9_ami"
+      kms_key: "fsafasfas"
+    - asg_name: "xva-prepod-asg"
+      launch_template: "xva-prepod-lt"
+      ami: "rhel9_ami"
+      kms_key: "fsafasfas"
 
 
 # Logging

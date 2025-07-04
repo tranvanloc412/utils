@@ -181,14 +181,21 @@ def execute_zone_operation(
     # Setup configuration
     config = ConfigManager()
 
-    # Get zones from config and filter if landing_zones specified
-    zones = config.get_zones() if hasattr(config, "get_zones") else []
-
-    # Filter zones by landing_zones if specified
+    # Get zones using new fallback logic
     if landing_zones:
-        from aws_ops.utils.lz import extract_environment_from_zone
-
+        # Use individual zone resolution with fallback for specific zones
         landing_zones_list = [lz.strip() for lz in landing_zones.split(",")]
+        zones = config.get_zones(zone_names=landing_zones_list)
+    else:
+        # Get all zones using legacy behavior
+        zones = config.get_zones() if hasattr(config, "get_zones") else []
+
+    # Additional filtering by environment if needed (legacy compatibility)
+    if landing_zones and zones:
+        from aws_ops.utils.lz import extract_environment_from_zone
+        
+        landing_zones_list = [lz.strip() for lz in landing_zones.split(",")]
+        # Filter zones that might have been resolved but don't match the exact names
         zones = [
             zone
             for zone in zones
